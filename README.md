@@ -20,7 +20,7 @@ Windows용 개인 프로젝트·일정 관리 앱입니다. 프로젝트와 작�
 
 ## 실행
 
-Node.js 22.13 이상과 npm이 필요합니다.
+Node.js 26 LTS(26.13.1 이상 권장)와 npm이 필요합니다.
 
 ```powershell
 npm install

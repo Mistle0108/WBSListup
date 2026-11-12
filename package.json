@@ -1,0 +1,27 @@
+{
+  "name": "wbs-list-up",
+  "productName": "WBS List up",
+  "version": "0.1.0",
+  "private": true,
+  "description": "개인용 프로젝트와 일정 관리",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "build": "esbuild src/editor-entry.js --bundle --platform=browser --format=iife --outfile=src/editor.bundle.js",
+    "prestart": "npm run build",
+    "postinstall": "npm run build"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@tiptap/core": "^3.33.0",
+    "@tiptap/extension-list": "^3.33.0",
+    "@tiptap/pm": "^3.33.0",
+    "@tiptap/starter-kit": "^3.33.0",
+    "zod": "^4.6.7"
+  }
+}

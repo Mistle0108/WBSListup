@@ -1,0 +1,42 @@
+async (phase) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const wait = async (fn, label) => { for (let i = 0; i < 200; i++) { if (fn()) return; await sleep(20); } throw Error('시간 초과: ' + label + ' / ' + document.querySelector('#status').textContent); };
+  const assert = (ok, message) => { if (!ok) throw Error(message); };
+  const button = (action, id) => document.querySelector(`[data-action="${action}"]${id ? `[data-id="${id}"]` : ''}`);
+  const click = async (action, id) => { const el = button(action,id); assert(el,'버튼 없음: '+action); el.click(); await wait(() => document.querySelector('#status').textContent !== '처리 중', action); };
+  const form = async (action, value, id, cancel = false) => {
+    if (action === 'delete-work') { const label=button('select-work',id); assert(label,'작업 없음'); label.dispatchEvent(new MouseEvent('dblclick',{bubbles:true})); await wait(()=>document.querySelector('#detail-dialog').open,'작업 상세'); document.querySelector('#detail-delete').click(); }
+    else { const el = button(action,id); assert(el,'버튼 없음: '+action); el.click(); }
+    await wait(() => document.querySelector('#dialog').open, '대화상자');
+    if (cancel) document.querySelector('#dialog-cancel').click();
+    else { const input = document.querySelector('#dialog-input'), select = document.querySelector('#dialog-select'); if (!input.hidden) input.value = value; if (!select.hidden) select.value = value; document.querySelector('#dialog-form').requestSubmit(); }
+    if (action === 'delete-work' && cancel) { await wait(()=>!document.querySelector('#dialog').open && !document.querySelector('#detail-form').inert,'삭제 취소'); document.querySelector('#detail-cancel').click(); }
+    if (action === 'delete-work') await wait(()=>!document.querySelector('#detail-dialog').open,'상세 닫힘');
+    await wait(() => document.querySelector('#status').textContent !== '처리 중', action);
+    assert(!document.querySelector('#status').classList.contains('error'), document.querySelector('#status').textContent);
+  };
+  await wait(() => document.querySelector('#status').textContent === '저장소 준비됨','초기화');
+  if (phase === 'write') {
+    await form('create-folder','폴더'); await form('create-project','프로젝트 A');
+    await form('create-group','큰 그룹'); await form('create-group','하위 그룹'); await click('create-task');
+    let content = await window.storage.loadContent();
+    const g = content.workItems.find(x=>x.name==='큰 그룹'), sub = content.workItems.find(x=>x.name==='하위 그룹'), task = content.workItems.find(x=>x.name==='새 작업');
+    assert(task.parentId === sub.id && sub.parentId === g.id, '중첩 생성 실패');
+    await click('toggle-work',g.id); assert(!button('select-work',task.id),'그룹 접기 실패');
+    await click('toggle-work',g.id); assert(button('select-work',task.id),'그룹 펼치기 실패');
+    data = await window.storage.command({op:'move',kind:'work',id:task.id,parentId:null}); render(); content = await window.storage.loadContent(); assert(content.workItems.find(x=>x.id===task.id).parentId===null,'이동 실패');
+    await form('delete-work','',g.id,true); assert((await window.storage.loadContent()).workItems.length === 3,'삭제 취소 실패');
+    await click('create-task'); content = await window.storage.loadContent(); const temp = content.workItems.filter(x => x.name === '새 작업').at(-1);
+    await form('delete-work','',temp.id); assert(!(await window.storage.loadContent()).workItems.some(x => x.id === temp.id),'삭제 저장 실패');
+    await form('create-project','프로젝트 B'); content = await window.storage.loadContent();
+    const a = content.projects.find(x=>x.name==='프로젝트 A'); await click('select-project',a.id);
+    await click('toggle-work',g.id); document.querySelector('#sidebar-toggle').click(); await wait(()=>document.querySelector('#sidebar').hidden,'사이드바 접기');
+    return '2단계 생성·중첩·접기·이동·삭제 취소·프로젝트 전환 통과';
+  }
+  const content = await window.storage.loadContent(); const view = await window.storage.loadViewState();
+  const a = content.projects.find(x=>x.name==='프로젝트 A'), g = content.workItems.find(x=>x.name==='큰 그룹');
+  assert(a && content.projects.length === 2 && content.workItems.length === 3,'내용 복원 실패');
+  assert(view.selectedProject === a.id && view.projects[a.id].collapsed.includes(g.id) && document.querySelector('#sidebar').hidden,'보기 복원 실패');
+  assert(document.querySelector('h1').textContent === '프로젝트 A','선택 프로젝트 복원 실패');
+  return '2단계 별도 프로세스 재실행 복원 통과';
+}

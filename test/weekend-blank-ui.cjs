@@ -1,0 +1,18 @@
+const {app,BrowserWindow}=require('electron'),path=require('node:path'),{Storage}=require('../src/storage');const dir=process.env.WBS_TEST_DIR;app.setPath('userData',dir);app.setPath('appData', dir);
+if(process.env.WBS_PHASE==='write'){const db=new Storage(path.join(dir,'data','wbs-list-up.sqlite'));const old={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'기존 문서 내용'}]}]};db.saveContent({workspace:null,folders:[],projects:[{id:'p',name:'프로젝트'}],workItems:[{id:'t',name:'새 작업',type:'task',projectId:'p',startDate:'2025-02-01',endDate:'2025-02-08'},{id:'old',name:'기존 작업',type:'task',projectId:'p',document:{schemaVersion:1,content:old}}],documents:[]});db.saveViewState({selectedProject:'p',expandedFolders:[],projects:{p:{collapsed:[],selected:null,centerDay:20120,pixelsPerDay:9}}});db.close();}
+require('../src/main');const delay=ms=>new Promise(r=>setTimeout(r,ms));app.whenReady().then(()=>{const win=BrowserWindow.getAllWindows()[0];win.setSize(1500,900);win.webContents.on('did-finish-load',async()=>{try{
+ const run=s=>win.webContents.executeJavaScript(s),check=(ok,msg)=>{if(!ok)throw Error(msg)};
+ const click=async sel=>{await run(`document.querySelector(${JSON.stringify(sel)}).click()`);await delay(140)};
+ const open=async id=>{await run(`document.querySelector('[data-action="select-work"][data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);await delay(150);check(await run(`document.querySelector('#detail-dialog').open`),'상세 열기 실패')};
+ await delay(350);
+ if(process.env.WBS_PHASE==='write'){
+  const colors=await run(`(()=>{const r=document.querySelector('.time-ruler'),day=s=>Date.parse(s+'T00:00:00Z')/86400000,sat=day('2025-02-01'),sun=day('2025-02-02'),mon=day('2025-02-03');const h=(n)=>r.querySelector('[data-day="'+n+'"]'),c=(n)=>document.querySelector('.timeline-cell [data-day="'+n+'"]');return {daily:r.classList.contains('day-view'),sat:h(sat)&&getComputedStyle(h(sat)).backgroundColor,sun:h(sun)&&getComputedStyle(h(sun)).backgroundColor,cellSat:c(sat)&&getComputedStyle(c(sat)).backgroundColor,cellSun:c(sun)&&getComputedStyle(c(sun)).backgroundColor,mon:!!h(mon)}})()`);
+  check(colors.daily && colors.sat==='rgb(227, 239, 255)' && colors.sun==='rgb(255, 231, 231)' && colors.cellSat===colors.sat && colors.cellSun===colors.sun && !colors.mon,'토·일 날짜 배경 실패: '+JSON.stringify(colors));
+  await open('t');await click('#tab-document');check(await run(`document.querySelector('.task-document-editor:not([hidden]) .tiptap').textContent===''`),'새 작업 문서 기본 내용 남음');
+  await click('#task-document-add');check(await run(`document.querySelector('.task-document-editor:not([hidden]) .tiptap').textContent===''`),'추가 문서 기본 내용 남음');
+  await run(`document.querySelector('#detail-form').requestSubmit()`);await delay(250);let d=await run(`window.storage.loadContent()`),task=d.workItems.find(x=>x.id==='t');check(task.taskDocuments.length===2 && task.taskDocuments.every(x=>!JSON.stringify(x.content).includes('목적')),'빈 문서 저장 실패');
+  await open('old');await click('#tab-document');check(await run(`document.querySelector('.task-document-editor:not([hidden]) .tiptap').textContent==='기존 문서 내용'`),'기존 문서 내용 손상');await click('#detail-cancel');
+  console.log('토·일 배경 및 신규 빈 문서, 기존 문서 유지 통과');
+ }else{await open('t');await click('#tab-document');check(await run(`document.querySelector('.task-document-editor:not([hidden]) .tiptap').textContent==='' && document.querySelector('#task-document-select').options.length===2`),'빈 문서 재실행 복원 실패');console.log('빈 문서 재실행 복원 통과');}
+ app.exit(0);
+}catch(e){console.error(e);app.exit(1)}})});setTimeout(()=>{console.error('시간 초과');app.exit(1)},30000).unref();

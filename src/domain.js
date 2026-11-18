@@ -71,6 +71,7 @@
     return {startDate:new Date(start * unit).toISOString().slice(0,10), endDate:new Date(end * unit).toISOString().slice(0,10)};
   }
   function validateDocument(document) {
+    if (document?.schemaVersion === 2 && typeof document.content === 'string') return;
     if (!document || document.schemaVersion !== 1 || document.content?.type !== 'doc') throw new Error('문서 형식이 올바르지 않습니다.');
     function check(node) {
       if (!node || typeof node !== 'object') throw new Error('문서 형식이 올바르지 않습니다.');

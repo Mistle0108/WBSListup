@@ -2,10 +2,10 @@ function openProjectOverview(project) {
   return new Promise(resolve => {
     const dialog=$('#project-overview-dialog'),tree=$('#overview-tree'),content=$('#overview-content'),error=$('#overview-error');
     const events=new AbortController(),signal=events.signal, rows=domain.numbered(data,project.id), byId=new Map(rows.map(row=>[row.item.id,row]));
-    const collapsed=new Set(), collapsedSections=new Set(), editors=[];
+    const collapsed=new Set(), collapsedSections=new Set();
     let sectionContent=content;
     let selected=byId.has(projectView(project.id).selected) ? projectView(project.id).selected : rows[0]?.item.id || null, moving=false;
-    function clearContent() { while(editors.length)editors.pop().destroy();content.replaceChildren(); }
+    function clearContent() { content.replaceChildren(); }
     function visible(item) { let parent=item.parentId;while(parent){if(collapsed.has(parent))return false;parent=byId.get(parent)?.item.parentId;}return true; }
     function drawTree() {
       tree.replaceChildren();
@@ -49,7 +49,15 @@ function openProjectOverview(project) {
         else {const text=document.createElement('div');text.className='overview-note-text';text.textContent=note.text || '';el.append(text);}
         layer.append(el);return {el,note};
       });
-      function draw() { layer.style.width=`${width*scale+32}px`;layer.style.height=`${height*scale+32}px`;for(const {el,note} of elements)el.style.transform=`translate(${(note.x-minX)*scale+16}px, ${(note.y-minY)*scale+16}px) scale(${scale})`; }
+      function draw() {
+        const ox = 16 - minX * scale, oy = 16 - minY * scale;
+        drawNoteGrid(viewport, scale, ox, oy);
+        layer.style.width = `${width * scale + 32}px`;
+        layer.style.height = `${height * scale + 32}px`;
+        for (const {el,note} of elements) {
+          el.style.transform = `translate(${note.x * scale + ox}px, ${note.y * scale + oy}px) scale(${scale})`;
+        }
+      }
       function fitBoard(){scale=Math.max(.05,Math.min(1,(viewport.clientWidth-32)/width,(viewport.clientHeight-32)/height));draw();viewport.scrollLeft=0;viewport.scrollTop=0;}
       out.addEventListener('click',()=>{scale=Math.max(.05,scale/1.25);draw();},{signal});plus.addEventListener('click',()=>{scale=Math.min(2,scale*1.25);draw();},{signal});fit.addEventListener('click',fitBoard,{signal});
       const section=box.closest('details');
@@ -82,14 +90,15 @@ function openProjectOverview(project) {
         const date=new Date(comment.createdAt);time.textContent=Number.isFinite(date.getTime())?new Intl.DateTimeFormat('ko-KR',{dateStyle:'medium',timeStyle:'short'}).format(date):'';
         line.append(text,time);sectionContent.append(line);
       }
+      sectionTitle('attachments','첨부파일');
+      createAttachments(sectionContent, 'work', item.id, signal, true);
       sectionTitle('documents','작업 문서');
       const docs=Array.isArray(item.taskDocuments)?item.taskDocuments:item.document?[{name:'작업 문서 1',...item.document}]:[];
       if(!docs.length)empty('저장된 작업 문서가 없습니다.');
       for(const doc of docs){
         const {box}=card(doc.name || '작업 문서','overview-document');
-        if(doc.schemaVersion!==1 || !doc.content){const p=document.createElement('p');p.className='error';p.textContent='지원하지 않는 문서 형식입니다.';box.append(p);continue;}
         const element=document.createElement('div');box.append(element);
-        try { const editor=createTaskEditor(element,doc.content);editor.setEditable(false);editors.push(editor); }
+        try { renderDocumentMarkdown(element,toDocumentMarkdown(doc.content,doc.schemaVersion)); }
         catch { element.className='error';element.textContent='문서를 표시하지 못했습니다.'; }
       }
       sectionTitle('boards','노트 보드');

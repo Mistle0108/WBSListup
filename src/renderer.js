@@ -62,6 +62,18 @@ function render() {
 function openDetail(item) {
   return new Promise(resolve => {
     const dialog = $('#detail-dialog'), form = $('#detail-form');
+    for (const dimension of ['width', 'height']) {
+      const size = view.detailDialogSize?.[dimension];
+      dialog.style[dimension] = Number.isFinite(size) && size > 0 ? `${size}px` : '';
+    }
+    // The native resize handle writes inline dimensions. Window and content changes do not.
+    const resizeObserver = new MutationObserver(() => {
+      const width = parseFloat(dialog.style.width), height = parseFloat(dialog.style.height);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+      view.detailDialogSize = {width, height};
+      scheduleViewSave();
+    });
+    resizeObserver.observe(dialog, {attributes:true, attributeFilter:['style']});
     const name = $('#detail-name'), start = $('#detail-start'), end = $('#detail-end'), color = $('#detail-color'), overview = $('#detail-overview'), summary = $('#detail-summary'), lock = $('#detail-lock'), error = $('#detail-error');
     const period = timeline.aggregate(data.workItems, item.projectId).get(item.id);
     const isGroup = item.type === 'group';
@@ -92,10 +104,11 @@ function openDetail(item) {
     commentInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); addComment(); } }, {signal:detailSignal});
     renderComments();
     function selectTab(which) {
-      for (const tab of ['notes','document','comments']) { $(`#${tab}-panel`).hidden = which !== tab; $(`#tab-${tab}`).setAttribute('aria-selected',String(which === tab)); }
+      for (const tab of ['notes','document','comments','attachments']) { $(`#${tab}-panel`).hidden = which !== tab; $(`#tab-${tab}`).setAttribute('aria-selected',String(which === tab)); }
     }
-    for (const tab of ['notes','document','comments']) $(`#tab-${tab}`).addEventListener('click', () => selectTab(tab), {signal:detailSignal});
-    selectTab('notes');
+    for (const tab of ['notes','document','comments','attachments']) $(`#tab-${tab}`).addEventListener('click', () => selectTab(tab), {signal:detailSignal});
+    createAttachments($('#task-attachments'), 'work', item.id, detailSignal);
+    selectTab('comments');
     let original = {name:item.name, startDate:item.type === 'group' ? '' : item.startDate || '', endDate:item.type === 'group' ? '' : item.endDate || '', overview:item.overview || '', hoverSummary:item.hoverSummary || '', barColor:validBarColor(item), comments:structuredClone(comments), commentDraft:'', ...collections.snapshot()};
     name.value = original.name; overview.value = original.overview; summary.value = original.hoverSummary; color.value = original.barColor;
     start.value = isGroup && period?.start !== null ? timeline.format(period.start) : original.startDate;
@@ -118,7 +131,7 @@ function openDetail(item) {
       lock.setAttribute('aria-pressed', String(locked()));
       $('#detail-period-hint').textContent = isGroup ? '그룹 기간은 하위 작업에서 자동 계산됩니다.' : locked() ? '일정이 잠겨 있어 날짜를 변경할 수 없습니다.' : '날짜를 모두 비우면 기간 미정입니다.';
     }
-    function finish() { detailEvents.abort(); collections.destroy(); dialog.close(); const target = document.querySelector(`[data-action="select-work"][data-id="${CSS.escape(item.id)}"]`); if (target) target.focus(); resolve(); }
+    function finish() { resizeObserver.disconnect(); detailEvents.abort(); collections.destroy(); dialog.close(); const target = document.querySelector(`[data-action="select-work"][data-id="${CSS.escape(item.id)}"]`); if (target) target.focus(); resolve(); }
     let saving = false;
     async function save() {
       if (saving) return false;
@@ -381,6 +394,19 @@ window.addEventListener('beforeunload', () => {
 function scheduleViewSave() {
   clearTimeout(viewSaveTimer);
   viewSaveTimer = setTimeout(() => { viewSaveTimer = null; persistView(structuredClone(view)).catch(error => { status.textContent = '보기 저장 실패: ' + error.message; status.className = 'error'; }); }, 500);
+}
+function openNoteBoard(kind, ownerId, entry, previous, root = document) {
+  const key = JSON.stringify([kind, ownerId, entry.id]);
+  return createNoteBoard(entry.notes, previous ?? view.noteBoardViews?.[key], root, camera => {
+    (view.noteBoardViews ||= {})[key] = camera;
+    scheduleViewSave();
+  });
+}
+function bindSavedMarkdownMode(kind, toggle, container, signal) {
+  return bindMarkdownMode(toggle, container, signal, view.markdownPreview?.[kind] === true, showPreview => {
+    (view.markdownPreview ||= {})[kind] = showPreview;
+    scheduleViewSave();
+  });
 }
 async function saveView(next) {
   clearTimeout(viewSaveTimer); viewSaveTimer = null;

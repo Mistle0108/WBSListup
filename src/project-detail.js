@@ -2,11 +2,12 @@ function openProjectDetail(project) {
   return new Promise(resolve => {
     const dialog = document.querySelector('#project-dialog'), list = document.querySelector('#project-doc-list');
     const error = document.querySelector('#project-doc-error'), events = new AbortController(), signal = events.signal;
-    const blank = {type:'doc',content:[{type:'paragraph'}]};
+    const modeToggle = document.querySelector('#project-document-mode');
+    const isPreview = bindSavedMarkdownMode('project', modeToggle, list, signal);
     let saving = false, selectedFolder = null, boardManager;
     let folders = data.projectDocumentFolders.filter(f => f.projectId === project.id).map(f => ({...f,expanded:true,element:null}));
     let docs = data.documents.filter(d => d.projectId === project.id && !d.workItemId).sort((a,b) => (a.sortOrder ?? 0)-(b.sortOrder ?? 0)).map(d => ({id:d.id,parentId:d.parentId || null,title:d.title,content:undefined,loaded:false,version:d.schemaVersion,saved:true,expanded:false,baseline:JSON.stringify({title:d.title}),editor:null,element:null}));
-    const snapshot = doc => ({title:doc.title,content:doc.editor ? doc.editor.getJSON() : doc.content});
+    const snapshot = doc => ({title:doc.title,content:doc.editor ? doc.editor.value : doc.content});
     const dirty = doc => !doc.saved || JSON.stringify(snapshot(doc)) !== doc.baseline;
     const displayState = doc => { doc.element.querySelector('.project-doc-state').textContent = dirty(doc) ? '미저장' : '저장됨'; };
     function refreshEmpty() { document.querySelector('#project-doc-empty').hidden = docs.length !== 0; }
@@ -25,8 +26,8 @@ function openProjectDetail(project) {
     }
     async function ensureLoaded(doc) {
       if (doc.loaded) return;
-      if (doc.version !== 1) throw new Error('지원하지 않는 문서 버전입니다.');
-      if (!doc.loading) doc.loading = window.storage.loadProjectDocument(project.id, doc.id).then(content => {
+      if (!doc.loading) doc.loading = window.storage.loadProjectDocument(project.id, doc.id).then(body => {
+        const content = toDocumentMarkdown(body, doc.version);
         doc.content = content; doc.loaded = true;
         doc.baseline = JSON.stringify({title:JSON.parse(doc.baseline).title,content});
       }).finally(() => { doc.loading = null; });
@@ -34,29 +35,8 @@ function openProjectDetail(project) {
     }
     function closeEditor(doc) {
       if (!doc.editor) return;
-      doc.content = doc.editor.getJSON(); doc.editor.destroy(); doc.editor = null;
+      doc.content = doc.editor.value; doc.editor = null;
       doc.element.querySelector('.project-editor').replaceChildren();
-    }
-    function formatCommand(doc, command) {
-      if (!doc.editor) return;
-      const editor = doc.editor, chain = editor.chain().focus();
-      if (command === 'paragraph') chain.setParagraph().run();
-      if (command === 'heading') chain.toggleHeading({level:2}).run();
-      if (command === 'bold') chain.toggleBold().run();
-      if (command === 'bullet') chain.toggleBulletList().run();
-      if (command === 'ordered') chain.toggleOrderedList().run();
-      if (command === 'task') chain.toggleTaskList().run();
-      if (command === 'link') {
-        const linkDialog = document.querySelector('#link-dialog'), url = document.querySelector('#link-url');
-        url.value = editor.getAttributes('link').href || ''; document.querySelector('#link-error').textContent = '';
-        document.querySelector('#link-cancel').onclick = () => { linkDialog.close(); editor.commands.focus(); };
-        document.querySelector('#link-form').onsubmit = event => {
-          event.preventDefault(); const value = url.value.trim();
-          if (value && !safeTaskLink(value)) { document.querySelector('#link-error').textContent = 'http, https 또는 mailto 주소를 입력해 주세요.'; return; }
-          linkDialog.close(); if (value) editor.chain().focus().extendMarkRange('link').setLink({href:value}).run(); else editor.chain().focus().extendMarkRange('link').unsetLink().run();
-        };
-        linkDialog.showModal(); url.focus();
-      }
     }
     async function expand(doc, shouldOpen) {
       const body = doc.element.querySelector('.project-doc-body'), button = doc.element.querySelector('.doc-toggle');
@@ -65,8 +45,8 @@ function openProjectDetail(project) {
         try { await ensureLoaded(doc); }
         catch (err) { error.textContent = '문서를 불러오지 못했습니다: ' + err.message; doc.expanded = false; body.hidden = true; button.textContent = '▸'; button.setAttribute('aria-expanded','false'); return; }
         if (!doc.expanded || !dialog.open || doc.editor) return;
-        doc.editor = createTaskEditor(doc.element.querySelector('.project-editor'), doc.content);
-        doc.editor.on('update', () => displayState(doc));
+        doc.editor = createMarkdownEditor(doc.element.querySelector('.project-editor'), doc.content, isPreview());
+        doc.editor.addEventListener('input', () => displayState(doc));
       } else if (!shouldOpen) closeEditor(doc);
       displayState(doc);
     }
@@ -85,7 +65,7 @@ function openProjectDetail(project) {
         try { await ensureLoaded(doc); } catch (err) { error.textContent = '문서를 불러오지 못했습니다: ' + err.message; return false; }
         const value = snapshot(doc), title = value.title.trim();
         if (!title || title.length > 200) { error.textContent = '문서 제목을 1~200자로 입력해 주세요.'; if (!doc.expanded) expand(doc,true); doc.element.scrollIntoView({block:'nearest'}); doc.element.querySelector('.doc-title').focus(); return false; }
-        payload.push({id:doc.id,parentId:doc.parentId || null,title,schemaVersion:1,content:value.content});
+        payload.push({id:doc.id,parentId:doc.parentId || null,title,schemaVersion:2,content:value.content});
       }
       const ids = new Set(toSave.map(doc => doc.id));
       const orderIds = docs.filter(doc => doc.saved || ids.has(doc.id)).map(doc => doc.id);
@@ -111,25 +91,26 @@ function openProjectDetail(project) {
     }
     function makeCard(doc) {
       const card = document.createElement('section'); card.className = 'project-doc'; card.dataset.docId = doc.id;
-      card.innerHTML = `<div class="project-doc-head"><span class="project-drag-handle doc-drag-handle" title="드래그하여 문서 이동" aria-label="문서 이동">⋮⋮</span><button type="button" class="doc-toggle" aria-label="문서 펼치기" aria-expanded="false">▸</button><input class="doc-title" aria-label="문서 제목" maxlength="200"><span class="project-doc-state"></span><button type="button" class="doc-up" aria-label="문서 위로">↑</button><button type="button" class="doc-down" aria-label="문서 아래로">↓</button><button type="button" class="doc-save">저장</button><button type="button" class="doc-delete">삭제</button></div><div class="project-doc-body" hidden><div class="toolbar project-editor-toolbar"><button type="button" data-doc-format="paragraph">본문</button><button type="button" data-doc-format="heading">제목</button><button type="button" data-doc-format="bold"><b>굵게</b></button><button type="button" data-doc-format="bullet">글머리</button><button type="button" data-doc-format="ordered">번호</button><button type="button" data-doc-format="task">체크리스트</button><button type="button" data-doc-format="link">링크</button></div><div class="project-editor"></div></div>`;
+      card.innerHTML = `<div class="project-doc-head"><span class="project-drag-handle doc-drag-handle" title="드래그하여 문서 이동" aria-label="문서 이동">⋮⋮</span><button type="button" class="doc-toggle" aria-label="문서 펼치기" aria-expanded="false">▸</button><input class="doc-title" aria-label="문서 제목" maxlength="200"><span class="project-doc-state"></span><button type="button" class="doc-up" aria-label="문서 위로">↑</button><button type="button" class="doc-down" aria-label="문서 아래로">↓</button><button type="button" class="doc-save">저장</button><button type="button" class="doc-delete">삭제</button></div><div class="project-doc-body" hidden><div class="project-editor"></div></div>`;
       doc.element = card; card.querySelector('.doc-title').value = doc.title;
       card.querySelector('.doc-title').addEventListener('input',event => { doc.title=event.target.value; displayState(doc); },{signal});
       card.querySelector('.doc-toggle').addEventListener('click',() => expand(doc,!doc.expanded),{signal});
       card.querySelector('.doc-up').addEventListener('click',() => reorder(doc,-1),{signal}); card.querySelector('.doc-down').addEventListener('click',() => reorder(doc,1),{signal});
       card.querySelector('.doc-save').addEventListener('click',() => saveDocuments([doc]),{signal}); card.querySelector('.doc-delete').addEventListener('click',() => remove(doc),{signal});
-      const toolbar = card.querySelector('.project-editor-toolbar'); toolbar.addEventListener('mousedown',event => event.preventDefault(),{signal});
-      toolbar.addEventListener('click',event => { const command=event.target.closest('[data-doc-format]')?.dataset.docFormat; if(command) formatCommand(doc,command); },{signal});
       displayState(doc); return card;
     }
-    function add(content) {
-      const doc = {id:crypto.randomUUID(),parentId:selectedFolder,title:'',content:structuredClone(content),loaded:true,version:1,saved:false,expanded:false,baseline:'',editor:null,element:null};
+    function add() {
+      const doc = {id:crypto.randomUUID(),parentId:selectedFolder,title:'',content:'',loaded:true,version:2,saved:false,expanded:false,baseline:'',editor:null,element:null};
       docs.push(doc); list.append(makeCard(doc)); const folder=folders.find(f=>f.id===selectedFolder);if(folder)folder.expanded=true; refreshOrder(); expand(doc,true);
       doc.element.scrollIntoView({block:'end'}); doc.element.querySelector('.doc-title').focus();
     }
-    function selectTab(board) {
-      document.querySelector('#project-doc-scroll').hidden=board; document.querySelector('#project-board-panel').hidden=!board;
-      document.querySelector('#project-doc-add').hidden=board; document.querySelector('#project-folder-add').hidden=board;
-      document.querySelector('#project-tab-docs').setAttribute('aria-selected',String(!board)); document.querySelector('#project-tab-board').setAttribute('aria-selected',String(board));
+    function selectTab(tab) {
+      for (const [name, panel] of [['docs','project-doc-scroll'],['board','project-board-panel'],['attachments','project-attachments-panel']]) {
+        document.getElementById(panel).hidden = tab !== name;
+        document.getElementById('project-tab-'+name).setAttribute('aria-selected', String(tab === name));
+      }
+      document.querySelector('#project-doc-add').hidden=tab!=='docs'; document.querySelector('#project-folder-add').hidden=tab!=='docs';
+      modeToggle.hidden = tab !== 'docs';
     }
     async function addFolder(parentId) {
       const label=await ask({title:'폴더 만들기',value:'새 폴더'});if(label===null)return;
@@ -216,12 +197,14 @@ function openProjectDetail(project) {
     list.replaceChildren(); document.querySelector('#project-detail-title').textContent = project.name + ' · 프로젝트 상세'; error.textContent = '';
     docs.forEach(doc => list.append(makeCard(doc))); folders.forEach(folder=>list.append(makeFolder(folder))); refreshOrder();
     boardManager=createProjectBoards(project,signal,()=>saveDocuments([],true));
-    document.querySelector('#project-doc-add').addEventListener('click',() => add(blank),{signal});
+    document.querySelector('#project-doc-add').addEventListener('click',add,{signal});
     document.querySelector('#project-folder-add').addEventListener('click',() => addFolder(selectedFolder),{signal});
     document.querySelector('.project-doc-root').addEventListener('click',()=>{selectedFolder=null;refreshOrder();},{signal});
-    document.querySelector('#project-tab-docs').addEventListener('click',()=>selectTab(false),{signal});
-    document.querySelector('#project-tab-board').addEventListener('click',()=>selectTab(true),{signal});
+    document.querySelector('#project-tab-docs').addEventListener('click',()=>selectTab('docs'),{signal});
+    document.querySelector('#project-tab-board').addEventListener('click',()=>selectTab('board'),{signal});
     document.querySelector('#project-detail-close').addEventListener('click',close,{signal}); dialog.oncancel = event => { event.preventDefault(); close(); };
-    installDrag(); selectTab(false); dialog.showModal(); document.querySelector('#project-doc-scroll').scrollTop = 0;
+    document.querySelector('#project-tab-attachments').addEventListener('click',()=>selectTab('attachments'),{signal});
+    createAttachments(document.querySelector('#project-attachments'), 'project', project.id, signal);
+    installDrag(); selectTab('docs'); dialog.showModal(); document.querySelector('#project-doc-scroll').scrollTop = 0;
   });
 }

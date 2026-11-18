@@ -14,7 +14,7 @@ test('일괄 작업과 문서를 저장하고 충돌과 실패 시 기존 상태
    {action:'set_bar_color',id:'t',color:'#Ab12Cd'},
    {action:'set_bar_color',id:'g',color:'#123456'}
   ]);
-  let state=db.loadContent(); assert.equal(state.workItems[1].endDate,'2026-11-03'); assert.equal(state.documents[0].content.content[1].content[0].text,'둘째 줄'); assert.equal(state.workItems[1].taskDocuments[0].id,'wd'); assert.equal(state.workItems[1].barColor,'#ab12cd'); assert.equal(state.workItems[0].barColor,'#123456');
+  let state=db.loadContent(); assert.equal(state.workItems[1].endDate,'2026-11-03'); assert.equal(state.documents[0].content,'첫 줄\n둘째 줄'); assert.deepEqual(state.workItems[1].taskDocuments[0],{id:'wd',name:'상세',schemaVersion:2,content:'작업 내용'}); assert.equal(state.workItems[1].barColor,'#ab12cd'); assert.equal(state.workItems[0].barColor,'#123456');
   assert.throws(()=>applyChanges(db,result.revision,[{action:'set_bar_color',id:'t',color:'red'}]),/색상/);
   assert.equal(db.loadContent().workItems[1].barColor,'#ab12cd');
   assert.throws(()=>applyChanges(db,'stale',[{action:'schedule',id:'t',startDate:'2026-12-01',endDate:'2026-12-02'}]),/변경/);

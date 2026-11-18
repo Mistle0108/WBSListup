@@ -1,6 +1,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const domain = require('./domain');
 
 const VERSION = 2;
@@ -19,6 +20,7 @@ function separate(content) {
 class Storage {
   constructor(file) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    this.attachmentDir = path.join(path.dirname(file), 'attachments');
     this.db = new DatabaseSync(file);
     try {
       const version = this.db.prepare('PRAGMA user_version').get().user_version;
@@ -39,6 +41,7 @@ class Storage {
           this.db.exec('COMMIT');
         } catch (error) { this.db.exec('ROLLBACK'); throw error; }
       }
+      this.db.exec('CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL)');
     } catch (error) { this.db.close(); throw error; }
   }
   read(key, fallback) {
@@ -86,9 +89,46 @@ class Storage {
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
+  attachmentOwner(kind, id) {
+    const content = this.loadContentMetadata();
+    if (!(kind === 'project' ? content.projects : kind === 'work' ? content.workItems : []).some(x => x.id === id)) throw new Error('첨부 대상이 없습니다.');
+  }
+  listAttachments(kind, id) {
+    this.attachmentOwner(kind, id);
+    return this.db.prepare('SELECT id, name FROM attachments WHERE kind = ? AND owner_id = ? ORDER BY rowid').all(kind, id);
+  }
+  addAttachment(kind, id, source) {
+    this.attachmentOwner(kind, id);
+    const attachmentId = randomUUID(), name = path.basename(source);
+    fs.mkdirSync(this.attachmentDir, { recursive: true });
+    const directory = path.join(this.attachmentDir, attachmentId);
+    fs.mkdirSync(directory);
+    const target = path.join(directory, name);
+    try { fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL); } catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+    try { this.db.prepare('INSERT INTO attachments (id, kind, owner_id, name) VALUES (?, ?, ?, ?)').run(attachmentId, kind, id, name); }
+    catch (error) { fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+  }
+  attachmentPath(kind, id, attachmentId) {
+    this.attachmentOwner(kind, id);
+    const row = this.db.prepare('SELECT id, name FROM attachments WHERE kind = ? AND owner_id = ? AND id = ?').get(kind, id, attachmentId);
+    if (!row) throw new Error('첨부파일을 찾을 수 없습니다.');
+    return { path: path.join(this.attachmentDir, row.id, row.name), name: row.name };
+  }
+  deleteAttachment(kind, id, attachmentId) {
+    const file = this.attachmentPath(kind, id, attachmentId);
+    this.db.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId);
+    fs.rmSync(path.dirname(file.path), { recursive: true, force: true });
+  }
   executeContent(command) {
     const updated = domain.apply(this.loadContentMetadata(), command);
     this.saveContent(updated);
+    const projects = new Set((updated.projects || []).map(x => x.id)), works = new Set((updated.workItems || []).map(x => x.id));
+    for (const row of this.db.prepare('SELECT id, kind, owner_id FROM attachments').all()) {
+      if (!(row.kind === 'project' ? projects : works).has(row.owner_id)) {
+        this.db.prepare('DELETE FROM attachments WHERE id = ?').run(row.id);
+        try { fs.rmSync(path.join(this.attachmentDir, row.id), { recursive: true, force: true }); } catch {}
+      }
+    }
     return this.loadContentMetadata();
   }
   saveViewState(view) { this.write('view', view); }

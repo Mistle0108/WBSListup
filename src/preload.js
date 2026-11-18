@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('storage', {
+  listAttachments: (kind, id) => ipcRenderer.invoke('attachments:list', kind, id),
+  addAttachments: (kind, id) => ipcRenderer.invoke('attachments:add', kind, id),
+  deleteAttachment: (kind, id, attachmentId) => ipcRenderer.invoke('attachments:delete', kind, id, attachmentId),
+  openAttachment: (kind, id, attachmentId) => ipcRenderer.invoke('attachments:open', kind, id, attachmentId),
   loadContent: () => ipcRenderer.invoke('storage:load-content'),
   loadProjectDocument: (projectId, documentId) => ipcRenderer.invoke('storage:load-project-document', projectId, documentId),
   loadViewState: () => ipcRenderer.invoke('storage:load-view'),

@@ -1,4 +1,14 @@
-window.createNoteBoard = function (initial, previous = null, root = document) {
+const noteGridStep = 20;
+const snapNoteGrid = value => Math.round(value / noteGridStep) * noteGridStep;
+
+function drawNoteGrid(viewport, scale, ox, oy) {
+  const spacing = noteGridStep * scale;
+  viewport.style.backgroundSize = `${spacing}px ${spacing}px`;
+  // Each dot sits at the center of its repeated background tile.
+  viewport.style.backgroundPosition = `${ox % spacing - spacing / 2}px ${oy % spacing - spacing / 2}px`;
+}
+
+window.createNoteBoard = function (initial, previous = null, root = document, onCameraChange) {
   const control = id => root === document ? document.querySelector(`#${id}`) : root.querySelector(`[data-board-control="${id}"]`);
   const viewport = control('note-viewport'), layer = control('note-layer');
   const events = new AbortController(), signal = events.signal;
@@ -6,7 +16,11 @@ window.createNoteBoard = function (initial, previous = null, root = document) {
   let active = true; const pending = new Set();
   const snapshot = () => JSON.stringify(notes);
   const push = previous => { if (previous !== snapshot()) history.push(previous); };
-  function transform() { layer.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`; }
+  const saveCamera = () => onCameraChange?.({scale, ox, oy});
+  function transform() {
+    layer.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+    drawNoteGrid(viewport, scale, ox, oy);
+  }
   function choose(id) { selected = id; layer.querySelectorAll('.board-note').forEach(el => el.classList.toggle('selected', el.dataset.id === id)); }
   function render() {
     layer.replaceChildren();
@@ -27,15 +41,18 @@ window.createNoteBoard = function (initial, previous = null, root = document) {
   }
   function undo() { if (!history.length) return; notes=JSON.parse(history.pop()); selected=null; render(); }
   control('note-add').addEventListener('click', () => {
-    const before=snapshot(); const x=(viewport.clientWidth/2-ox)/scale-100, y=(viewport.clientHeight/2-oy)/scale-70;
+    const before=snapshot();
+    const x=snapNoteGrid((viewport.clientWidth/2-ox)/scale-110);
+    const y=snapNoteGrid((viewport.clientHeight/2-oy)/scale-80);
     const note={id:crypto.randomUUID(),title:'메모',text:'',x,y,width:220,height:160,z:Math.max(0,...notes.map(n=>n.z))+1}; notes.push(note); selected=note.id; push(before); render(); layer.querySelector(`[data-id="${CSS.escape(note.id)}"] textarea`).focus();
   }, {signal});
   control('note-undo').addEventListener('click',undo,{signal});
   control('note-fit').addEventListener('click',()=>{
-    if (!notes.length) {scale=1;ox=0;oy=0;transform();return;}
+    if (!notes.length) {scale=1;ox=0;oy=0;transform();saveCamera();return;}
     const minX=Math.min(...notes.map(n=>n.x)),minY=Math.min(...notes.map(n=>n.y)),maxX=Math.max(...notes.map(n=>n.x+n.width)),maxY=Math.max(...notes.map(n=>n.y+n.height));
     scale=Math.max(.2,Math.min(2,(viewport.clientWidth-60)/(maxX-minX),(viewport.clientHeight-60)/(maxY-minY)));
     ox=(viewport.clientWidth-(maxX-minX)*scale)/2-minX*scale; oy=(viewport.clientHeight-(maxY-minY)*scale)/2-minY*scale;transform();
+    saveCamera();
   },{signal});
   viewport.addEventListener('paste',event=>{
     if (event.target.closest('textarea, input, [contenteditable="true"]')) return;
@@ -48,8 +65,8 @@ window.createNoteBoard = function (initial, previous = null, root = document) {
         const size = await new Promise((resolve,reject) => { const image=new Image();image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});image.onerror=reject;image.src=dataUrl; });
         if (!active) return;
         const before=snapshot(), ratio=Math.min(1,320/size.width,240/size.height);
-        const width=Math.max(120,Math.round(size.width*ratio)),height=Math.max(100,Math.round(size.height*ratio)+30);
-        const x=(viewport.clientWidth/2-ox)/scale-width/2,y=(viewport.clientHeight/2-oy)/scale-height/2;
+        const width=Math.max(120,snapNoteGrid(size.width*ratio)),height=Math.max(100,snapNoteGrid(size.height*ratio+30));
+        const x=snapNoteGrid((viewport.clientWidth/2-ox)/scale-width/2),y=snapNoteGrid((viewport.clientHeight/2-oy)/scale-height/2);
         const note={id:crypto.randomUUID(),type:'image',title:'이미지',dataUrl,x,y,width,height,z:Math.max(0,...notes.map(n=>n.z))+1};
         notes.push(note);selected=note.id;push(before);render();
       } catch { if (active) { const message = root === document ? document.querySelector('#detail-error') : root.querySelector('[data-board-error]'); if(message)message.textContent='이미지를 붙여넣지 못했습니다.'; } }
@@ -58,9 +75,13 @@ window.createNoteBoard = function (initial, previous = null, root = document) {
   },{signal});
   viewport.addEventListener('wheel',event=>{
     if (event.target.closest('textarea, input')) return;
-    event.preventDefault(); const rect=viewport.getBoundingClientRect(), x=event.clientX-rect.left,y=event.clientY-rect.top;
+    event.preventDefault();
+    if (drag) return;
+    const rect=viewport.getBoundingClientRect(), x=event.clientX-rect.left-viewport.clientLeft,y=event.clientY-rect.top-viewport.clientTop;
     const before=scale;scale=Math.max(.2,Math.min(3,scale*Math.exp(-Math.max(-120,Math.min(120,event.deltaY))*.002)));
+    if (scale === before) return;
     ox=x-(x-ox)*scale/before;oy=y-(y-oy)*scale/before;transform();
+    saveCamera();
   },{signal,passive:false});
   viewport.addEventListener('focusin',event=>{const box=event.target.closest('.board-note');if(box){choose(box.dataset.id);if(event.target.matches('textarea, .note-title'))textBefore=snapshot();}},{signal});
   viewport.addEventListener('focusout',event=>{if(event.target.matches('textarea, .note-title') && textBefore!==null){push(textBefore);textBefore=null;}},{signal});
@@ -79,12 +100,27 @@ window.createNoteBoard = function (initial, previous = null, root = document) {
     if(!drag || event.pointerId!==drag.id)return;
     const dx=event.clientX-drag.x,dy=event.clientY-drag.y;
     if(drag.mode==='pan'){ox=drag.ox+dx;oy=drag.oy+dy;transform();return;}
-    if(drag.mode==='move'){drag.note.x=drag.noteStart.x+dx/scale;drag.note.y=drag.noteStart.y+dy/scale;}
-    else {drag.note.width=Math.max(120,drag.noteStart.width+dx/scale);drag.note.height=Math.max(100,drag.noteStart.height+dy/scale);}
+    const { note, noteStart } = drag;
+    if (!dx && !dy) {
+      Object.assign(note, noteStart);
+    } else if (drag.mode === 'move') {
+      note.x = snapNoteGrid(noteStart.x + dx / scale);
+      note.y = snapNoteGrid(noteStart.y + dy / scale);
+    } else {
+      const snapEdge = (origin, size, delta, minimum) =>
+        Math.max(snapNoteGrid(origin + size + delta / scale), Math.ceil((origin + minimum) / noteGridStep) * noteGridStep);
+      note.width = snapEdge(noteStart.x, noteStart.width, dx, 120) - noteStart.x;
+      note.height = snapEdge(noteStart.y, noteStart.height, dy, 100) - noteStart.y;
+    }
     const box=layer.querySelector(`[data-id="${CSS.escape(drag.note.id)}"]`);
     Object.assign(box.style,{left:drag.note.x+'px',top:drag.note.y+'px',width:drag.note.width+'px',height:drag.note.height+'px'});
   },{signal});
-  viewport.addEventListener('pointerup',event=>{if(drag && event.pointerId===drag.id){if(drag.mode!=='pan')push(drag.before);drag=null;}},{signal});
+  viewport.addEventListener('pointerup', event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (drag.mode !== 'pan') push(drag.before);
+    else if (ox !== drag.ox || oy !== drag.oy) saveCamera();
+    drag = null;
+  }, {signal});
   const cancel=event=>{if(drag && event.pointerId===drag.id){if(drag.mode!=='pan'){notes=JSON.parse(drag.before);render();} else {ox=drag.ox;oy=drag.oy;transform();}drag=null;}};
   viewport.addEventListener('pointercancel',cancel,{signal});viewport.addEventListener('lostpointercapture',cancel,{signal});
   viewport.addEventListener('keydown',event=>{

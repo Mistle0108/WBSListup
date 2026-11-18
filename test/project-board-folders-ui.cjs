@@ -10,7 +10,7 @@ require('../src/main');const delay=ms=>new Promise(r=>setTimeout(r,ms));app.when
  await delay(350);
  if(process.env.WBS_PHASE==='write'){
   await click('[data-action="detail-project"][data-id="p"]');check(await run(`!document.querySelector('#project-doc-add-empty')`),'중복 문서 추가 버튼 남음');
-  await click('#project-doc-add');check(await run(`document.querySelector('.project-doc:last-child .tiptap').textContent===''`),'새 프로젝트 문서 빈 문서 아님');
+  await click('#project-doc-add');check(await run(`document.querySelector('.project-doc:last-child .markdown-source').value===''`),'새 프로젝트 문서 빈 문서 아님');
   const fresh=await run(`document.querySelector('.project-doc:last-child').dataset.docId`);await run(`(()=>{const t=document.querySelector('[data-doc-id="${fresh}"] .doc-title');t.value='새 문서';t.dispatchEvent(new Event('input',{bubbles:true}))})()`);await click(`[data-doc-id="${fresh}"] .doc-save`);await click(`[data-doc-id="${fresh}"] .doc-toggle`);
   await folder('#project-folder-add','상위 폴더');let d=await load(),a=d.projectDocumentFolders.find(x=>x.name==='상위 폴더').id;
   await folder(`[data-folder-id="${a}"] .folder-add`,'하위 폴더');d=await load();const b=d.projectDocumentFolders.find(x=>x.name==='하위 폴더').id;check(d.projectDocumentFolders.find(x=>x.id===b).parentId===a,'하위 폴더 생성 실패');
@@ -23,8 +23,8 @@ require('../src/main');const delay=ms=>new Promise(r=>setTimeout(r,ms));app.when
   await run(`document.querySelector('[data-board-control="note-viewport"]').focus()`);await paste('[data-board-control="note-viewport"]');
   check(await run(`!!document.querySelector('#project-board-panel .image-note img') && !document.querySelector('#project-board-panel .note-handle').textContent.includes('메모 이동')`),'프로젝트 보드 이미지 붙여넣기 실패');
   const imageBefore=await run(`(()=>{const e=document.querySelector('#project-board-panel .image-note');return {x:parseFloat(e.style.left),w:parseFloat(e.style.width)}})()`);
-  await dragBy('#project-board-panel .image-note .note-grip',30,15);const imageMoved=await run(`parseFloat(document.querySelector('#project-board-panel .image-note').style.left)`);check(Math.abs(imageMoved-imageBefore.x-30)<1,'이미지 이동 실패');
-  await dragBy('#project-board-panel .image-note .note-resize',40,25);check(await run(`parseFloat(document.querySelector('#project-board-panel .image-note').style.width)`) > imageBefore.w,'이미지 크기 변경 실패');
+  await dragBy('#project-board-panel .image-note .note-grip',30,15);const imageMoved=await run(`parseFloat(document.querySelector('#project-board-panel .image-note').style.left)`);check(imageBefore.x%20===0 && imageMoved===imageBefore.x+40,'이미지 이동 실패');
+  await dragBy('#project-board-panel .image-note .note-resize',40,25);check(await run(`parseFloat(document.querySelector('#project-board-panel .image-note').style.width)`) === imageBefore.w+40,'이미지 크기 변경 실패');
   await click('[data-board-control="note-undo"]');check(await run(`parseFloat(document.querySelector('#project-board-panel .image-note').style.width)`)===imageBefore.w,'이미지 크기 되돌리기 실패');
   await click('#project-board-save');d=await load();let board=d.projects.find(x=>x.id==='p').boards[0];check(board.notes.some(n=>n.type==='image'&&n.dataUrl.startsWith('data:image/png;base64,')) && board.notes.some(n=>n.title==='프로젝트 메모'),'프로젝트 보드 저장 실패');
   await run(`(()=>{const n=document.querySelector('#project-board-panel .note-title');n.value='동시 저장 메모';n.dispatchEvent(new Event('input',{bubbles:true}))})()`);

@@ -15,7 +15,7 @@ app.whenReady().then(() => {
    const first=await read();
    const applied=await client.callTool({name:'apply_changes',arguments:{revision:first.revision,changes:[{action:'create_project',id:'p',name:'연동 프로젝트'},{action:'create_work',id:'t',projectId:'p',name:'연동 작업',type:'task',startDate:'2026-11-10',endDate:'2026-11-12'},{action:'save_project_document',id:'d',projectId:'p',title:'계획',text:'본문'},{action:'set_bar_color',id:'t',color:'#ab12cd'}]}});
    assert.equal(applied.isError,undefined,JSON.stringify(applied));
-   const saved = (await read()).data; assert.equal(saved.documents[0].content.content[0].content[0].text,'본문'); assert.equal(saved.workItems[0].barColor,'#ab12cd');
+   const saved = (await read()).data; assert.equal(saved.documents[0].content,'본문'); assert.equal(saved.workItems[0].barColor,'#ab12cd');
    assert.equal(await win.webContents.executeJavaScript("document.querySelector('#folders').textContent.includes('연동 프로젝트')"),true);
    await win.webContents.executeJavaScript("document.querySelector('#project-dialog').showModal()");
    const second=await read();

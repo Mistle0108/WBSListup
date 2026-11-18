@@ -1,6 +1,6 @@
 function createProjectBoards(project, signal, onSave) {
   const root = document.querySelector('#project-board-panel'), select = root.querySelector('#project-board-select'), input = root.querySelector('#project-board-name');
-  let boards = project.boards ? structuredClone(project.boards) : [{id:crypto.randomUUID(),name:'프로젝트 보드 1',notes:[]}];
+  let boards = project.boards ? structuredClone(project.boards) : [{id:`default:${project.id}`,name:'프로젝트 보드 1',notes:[]}];
   let index = boards.length ? 0 : -1, board = null;
   const states = new Map();
   function capture() { if (!board || index < 0 || !boards[index]) return; const state=board.exportState(); boards[index].notes=state.notes; states.set(boards[index].id,state); }
@@ -11,7 +11,7 @@ function createProjectBoards(project, signal, onSave) {
     boards.forEach((entry,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=entry.name || '(이름 없음)';select.append(option);});
     select.value=index<0?'':String(index);select.disabled=index<0;input.disabled=index<0;root.querySelector('#project-board-delete').disabled=index<0;root.querySelector('#project-board-workspace').hidden=index<0;
     if(index<0){input.value='';return;}
-    const entry=boards[index];input.value=entry.name;board=createNoteBoard(entry.notes,states.get(entry.id),root);
+    const entry=boards[index];input.value=entry.name;board=openNoteBoard('project',project.id,entry,states.get(entry.id),root);
   }
   select.addEventListener('change',async()=>{const next=Number(select.value);if(board)await board.waitPending();show(next);},{signal});
   input.addEventListener('input',()=>{if(index<0)return;boards[index].name=input.value;select.options[index].textContent=input.value || '(이름 없음)';},{signal});

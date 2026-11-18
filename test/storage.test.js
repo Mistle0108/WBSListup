@@ -53,3 +53,28 @@ test('더 새로운 스키마를 빈 데이터로 열지 않는다', () => {
     assert.throws(() => new Storage(file), /지원하지 않는 데이터 버전/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('첨부파일은 대상별로 복사하여 보관하고 삭제한다', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wbs-attachment-'));
+  try {
+    const file = path.join(dir, 'data.sqlite'), source = path.join(dir, '한글 문서.txt');
+    fs.writeFileSync(source, '첨부 내용');
+    let db = new Storage(file);
+    db.saveContent({ projects: [{id:'p'}], workItems: [{id:'t',projectId:'p'}], documents: [] });
+    db.addAttachment('project', 'p', source);
+    db.addAttachment('work', 't', source);
+    const [work] = db.listAttachments('work', 't');
+    assert.equal(work.name, '한글 문서.txt');
+    assert.equal(db.listAttachments('project', 'p').length, 1);
+    assert.throws(() => db.attachmentPath('project', 'p', work.id), /찾을 수 없습니다/);
+    fs.unlinkSync(source);
+    db.close(); db = new Storage(file);
+    const copy = db.attachmentPath('work', 't', work.id).path;
+    assert.equal(fs.readFileSync(copy, 'utf8'), '첨부 내용');
+    db.deleteAttachment('work', 't', work.id);
+    assert.equal(fs.existsSync(copy), false);
+    assert.equal(db.listAttachments('work', 't').length, 0);
+    assert.equal(db.listAttachments('project', 'p').length, 1);
+    db.close();
+  } finally { fs.rmSync(dir, {recursive:true, force:true}); }
+});

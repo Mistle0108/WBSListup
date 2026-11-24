@@ -3,6 +3,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {revision, applyChanges} = require('./agent-operations');
+function documentTargets(changes) {
+  if (!Array.isArray(changes) || !changes.length || changes.length > 100) return null;
+  const targets = changes.map(change => {
+    switch (change?.action) {
+      case 'save_work_document':
+      case 'delete_work_document':
+        return {kind:'work', ownerId:change.workId, id:change.id};
+      case 'save_project_document':
+      case 'delete_project_document':
+        return {kind:'project', ownerId:change.projectId, id:change.id};
+      default: return null;
+    }
+  });
+  return targets.every(target => target && typeof target.ownerId === 'string' &&
+    (target.id === undefined || typeof target.id === 'string')) ? targets : null;
+}
 async function startAgentServer(storage, window, directory) {
   const token = crypto.randomBytes(32).toString('hex'); let writing = false;
   const server = http.createServer((req,res) => {
@@ -19,10 +35,14 @@ async function startAgentServer(storage, window, directory) {
         else if (request.method === 'apply') {
           if (writing) throw new Error('다른 요청이 처리 중입니다.');
           writing = true; locked = true;
-          if (!await window.webContents.executeJavaScript('window.agentBridge.begin()')) throw new Error('앱에서 편집 또는 다른 작업이 진행 중입니다. 창을 닫은 뒤 다시 시도하세요.');
+          const targets = documentTargets(request.changes);
+          const blocked = await window.webContents.executeJavaScript(`window.agentBridge.begin(${JSON.stringify(targets)})`);
+          if (blocked) throw new Error(blocked);
           acquired = true;
           result = applyChanges(storage, request.revision, request.changes);
-          await window.webContents.executeJavaScript(`window.agentBridge.finish(${JSON.stringify(storage.loadContentMetadata())})`);
+          const savedTargets = targets?.map((target, index) => ({...target, id:result.results[index].id})) ?? [];
+          const update = {content:storage.loadContentMetadata(), targets:savedTargets};
+          await window.webContents.executeJavaScript(`window.agentBridge.finish(${JSON.stringify(update)})`);
         } else throw new Error('알 수 없는 요청입니다.');
         res.end(JSON.stringify({result}));
       } catch (error) {

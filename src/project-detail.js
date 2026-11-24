@@ -4,9 +4,14 @@ function openProjectDetail(project, initialTab) {
     const error = document.querySelector('#project-doc-error'), events = new AbortController(), signal = events.signal;
     const modeToggle = document.querySelector('#project-document-mode');
     const isPreview = bindSavedMarkdownMode('project', modeToggle, list, signal);
-    let saving = false, selectedFolder = null, boardManager;
+    let saving = false, preparingSave = false, dragging = false, selectedFolder = null, boardManager;
     let folders = data.projectDocumentFolders.filter(f => f.projectId === project.id).map(f => ({...f,expanded:true,element:null}));
-    let docs = data.documents.filter(d => d.projectId === project.id && !d.workItemId).sort((a,b) => (a.sortOrder ?? 0)-(b.sortOrder ?? 0)).map(d => ({id:d.id,parentId:d.parentId || null,title:d.title,content:undefined,loaded:false,version:d.schemaVersion,saved:true,expanded:false,baseline:JSON.stringify({title:d.title}),editor:null,element:null}));
+    const readDocument = d => ({
+      id:d.id, parentId:d.parentId || null, title:d.title, content:undefined, loaded:false, version:d.schemaVersion,
+      saved:true, expanded:false, baseline:JSON.stringify({title:d.title}), expected:domain.projectDocumentVersion(d), editor:null, element:null
+    });
+    let docs = data.documents.filter(d => d.projectId === project.id && !d.workItemId)
+      .sort((a,b) => (a.sortOrder ?? 0)-(b.sortOrder ?? 0)).map(readDocument);
     const snapshot = doc => ({title:doc.title,content:doc.editor ? doc.editor.value : doc.content});
     const dirty = doc => !doc.saved || JSON.stringify(snapshot(doc)) !== doc.baseline;
     const displayState = doc => { doc.element.querySelector('.project-doc-state').textContent = dirty(doc) ? '미저장' : '저장됨'; };
@@ -15,17 +20,46 @@ function openProjectDetail(project, initialTab) {
       setTabCount('project-tab-docs', docs.length);
     }
     function refreshOrder() {
+      let last = null;
+      function place(element) {
+        const next = last ? last.nextElementSibling : list.firstElementChild;
+        if (next !== element) list.insertBefore(element, next);
+        last = element;
+      }
       function visit(parentId,depth,visible) {
         for (const folder of folders.filter(f => (f.parentId || null) === parentId)) {
           folder.element.style.marginLeft = `${depth*20}px`; folder.element.hidden = !visible; folder.element.classList.toggle('selected',selectedFolder===folder.id);
           const toggle=folder.element.querySelector('.folder-toggle');toggle.textContent=folder.expanded?'▾':'▸';toggle.setAttribute('aria-expanded',String(folder.expanded));toggle.setAttribute('aria-label',folder.expanded?'폴더 접기':'폴더 펼치기');
-          list.append(folder.element);
+          place(folder.element);
           visit(folder.id,depth+1,visible && folder.expanded);
         }
-        for (const doc of docs.filter(d => (d.parentId || null) === parentId)) { doc.element.style.marginLeft=`${depth*20}px`;doc.element.hidden=!visible;list.append(doc.element); }
+        for (const doc of docs.filter(d => (d.parentId || null) === parentId)) { doc.element.style.marginLeft=`${depth*20}px`;doc.element.hidden=!visible;place(doc.element); }
       }
       visit(null,0,true); refreshEmpty();
       document.querySelector('.project-doc-root').classList.toggle('selected',selectedFolder===null);
+    }
+    function refreshDocuments(targets) {
+      const ids = new Set(targets.filter(target => target.kind === 'project' && target.ownerId === project.id).map(target => target.id));
+      if (!ids.size) return;
+      const latest = new Map(data.documents.filter(doc => doc.projectId === project.id && !doc.workItemId).map(doc => [doc.id, doc]));
+      const reopen = [];
+      for (const id of ids) {
+        const index = docs.findIndex(doc => doc.id === id);
+        const previous = docs[index];
+        const entry = latest.get(id);
+        if (previous) {
+          previous.element.remove();
+          docs.splice(index, 1);
+        }
+        if (entry) {
+          const doc = readDocument(entry);
+          makeCard(doc);
+          docs.splice(previous ? index : docs.length, 0, doc);
+          if (previous?.expanded) reopen.push(doc);
+        }
+      }
+      refreshOrder();
+      for (const doc of reopen) expand(doc, true);
     }
     async function ensureLoaded(doc) {
       if (doc.loaded) return;
@@ -61,6 +95,12 @@ function openProjectDetail(project, initialTab) {
       finally { dialog.inert = false; saving = false; }
     }
     async function saveDocuments(toSave, includeBoards = false) {
+      if (saving || preparingSave) return false;
+      preparingSave = true;
+      try { return await commitDocuments(toSave, includeBoards); }
+      finally { preparingSave = false; }
+    }
+    async function commitDocuments(toSave, includeBoards) {
       if (!toSave.length && !includeBoards) return true;
       if (includeBoards) await boardManager.waitPending();
       const payload = [];
@@ -68,7 +108,7 @@ function openProjectDetail(project, initialTab) {
         try { await ensureLoaded(doc); } catch (err) { error.textContent = '문서를 불러오지 못했습니다: ' + err.message; return false; }
         const value = snapshot(doc), title = value.title.trim();
         if (!title || title.length > 200) { error.textContent = '문서 제목을 1~200자로 입력해 주세요.'; if (!doc.expanded) expand(doc,true); doc.element.scrollIntoView({block:'nearest'}); doc.element.querySelector('.doc-title').focus(); return false; }
-        payload.push({id:doc.id,parentId:doc.parentId || null,title,schemaVersion:2,content:value.content});
+        payload.push({id:doc.id,parentId:doc.parentId || null,title,schemaVersion:2,content:value.content,expected:doc.expected ?? null});
       }
       const ids = new Set(toSave.map(doc => doc.id));
       const orderIds = docs.filter(doc => doc.saved || ids.has(doc.id)).map(doc => doc.id);
@@ -76,7 +116,14 @@ function openProjectDetail(project, initialTab) {
       if (includeBoards) command.boards=boardManager.snapshot();
       if (!(await run(command))) return false;
       if (includeBoards) boardManager.committed();
-      for (const doc of toSave) { const payloadItem = payload.find(d => d.id === doc.id); doc.saved = true; doc.title = payloadItem.title; doc.content = structuredClone(payloadItem.content); doc.element.querySelector('.doc-title').value = doc.title; doc.baseline = JSON.stringify({title:doc.title,content:doc.content}); displayState(doc); }
+      for (const doc of toSave) {
+        const saved = data.documents.find(entry => entry.id === doc.id);
+        const payloadItem = payload.find(entry => entry.id === doc.id);
+        doc.saved = true; doc.title = saved.title; doc.content = payloadItem.content;
+        doc.expected = domain.projectDocumentVersion(saved);
+        doc.element.querySelector('.doc-title').value = doc.title;
+        doc.baseline = JSON.stringify({title:doc.title,content:doc.content}); displayState(doc);
+      }
       return true;
     }
     async function reorder(doc, direction) {
@@ -147,7 +194,7 @@ function openProjectDetail(project, initialTab) {
       const scroll=document.querySelector('#project-doc-scroll'),root=scroll.querySelector('.project-doc-root');
       let pending=null,target=null,active=false;
       function clear() { scroll.querySelectorAll('.project-doc-drop-inside,.project-doc-drop-before,.project-doc-drop-after').forEach(el=>el.classList.remove('project-doc-drop-inside','project-doc-drop-before','project-doc-drop-after')); }
-      function reset(){pending=null;target=null;active=false;clear();}
+      function reset(){pending=null;target=null;active=false;dragging=false;clear();}
       scroll.addEventListener('pointerdown',event=>{
         const handle=event.target.closest('.project-drag-handle');if(!handle || event.button!==0 || saving)return;
         const card=handle.closest('.project-doc'),folder=handle.closest('.project-folder');
@@ -156,7 +203,7 @@ function openProjectDetail(project, initialTab) {
       scroll.addEventListener('pointermove',event=>{
         if(!pending || event.pointerId!==pending.pointerId)return;
         if(!active && Math.hypot(event.clientX-pending.x,event.clientY-pending.y)<6)return;
-        if(!active){active=true;scroll.setPointerCapture(event.pointerId);}event.preventDefault();clear();target=null;
+        if(!active){active=true;dragging=true;scroll.setPointerCapture(event.pointerId);}event.preventDefault();clear();target=null;
         const el=document.elementFromPoint(event.clientX,event.clientY),folder=el?.closest('.project-folder'),card=el?.closest('.project-doc');
         if(el?.closest('.project-doc-root')) target={parentId:null,element:root,placement:'inside'};
         else if(folder){const id=folder.dataset.folderId;if(pending.type!=='folder' || !domain.descendants(folders,pending.id).has(id)) target={parentId:id,element:folder,placement:'inside'};}
@@ -188,7 +235,7 @@ function openProjectDetail(project, initialTab) {
       target?.focus(); resolve();
     }
     async function close() {
-      if (saving) return;
+      if (saving || preparingSave) return;
       saving = true; dialog.inert = true;
       try { await boardManager.waitPending(); } finally { saving = false; dialog.inert = false; }
       const changed = docs.filter(dirty), boardDirty=boardManager.dirty(); if (!changed.length && !boardDirty) { finish(); return; }
@@ -212,6 +259,13 @@ function openProjectDetail(project, initialTab) {
     document.querySelector('#project-tab-attachments').addEventListener('click',()=>selectTab('attachments'),{signal});
     createAttachments(document.querySelector('#project-attachments'), 'project', project.id, signal, false, attachmentCountListener('project', project, 'project-tab-attachments', signal));
     const tab = {document:'docs', notes:'board', attachments:'attachments'}[initialTab] ?? 'docs';
+    registerDocumentEditor({
+      dialog, kind:'project', ownerId:project.id,
+      isBusy:() => saving || preparingSave || dragging,
+      protects:id => docs.some(doc => doc.id === id &&
+        (doc.loading || dirty(doc) || doc.element.contains(document.activeElement))),
+      refresh:refreshDocuments
+    }, signal);
     installDrag(); selectTab(tab); dialog.showModal(); document.querySelector('#project-doc-scroll').scrollTop = 0;
     if (initialTab) document.getElementById('project-tab-' + tab).focus();
   });

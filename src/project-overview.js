@@ -93,7 +93,7 @@ function openProjectOverview(project) {
       sectionTitle('attachments','첨부파일');
       createAttachments(sectionContent, 'work', item.id, signal, true);
       sectionTitle('documents','작업 문서');
-      const docs=Array.isArray(item.taskDocuments)?item.taskDocuments:item.document?[{name:'작업 문서 1',...item.document}]:[];
+      const docs=domain.workDocuments(item);
       if(!docs.length)empty('저장된 작업 문서가 없습니다.');
       for(const doc of docs){
         const {box}=card(doc.name || '작업 문서','overview-document');

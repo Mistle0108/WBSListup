@@ -38,6 +38,7 @@ require('../src/main');const delay=ms=>new Promise(r=>setTimeout(r,ms));app.when
   d=await load();check(d.documents.find(x=>x.id==='d1').parentId===b && d.documents.find(x=>x.id==='other').projectId==='q','폴더 재진입 또는 다른 프로젝트 독립성 실패');
   await click('#project-tab-board');check(await run(`!!document.querySelector('#project-board-panel .image-note img')`),'프로젝트 이미지 재진입 실패');
   await click('#project-detail-close');await run(`document.querySelector('[data-action="select-work"][data-id="t"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);await delay(140);
+  await click('#tab-notes');await click('#board-add');
   await run(`document.querySelector('#note-viewport').focus()`);await paste('#note-viewport',0);
   await run(`document.querySelector('#detail-form').requestSubmit()`);await delay(350);d=await load();check(d.workItems.find(x=>x.id==='t').boards[0].notes.some(n=>n.type==='image'),'붙여넣기 직후 작업 이미지 저장 실패');
   console.log('프로젝트 빈 문서·폴더 계층·문서 드래그·프로젝트/작업 이미지 저장 통과');

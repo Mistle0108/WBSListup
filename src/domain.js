@@ -10,6 +10,9 @@
     if (Array.isArray(item.boards)) return item.boards;
     return item.notes?.length ? [{id:`default:${item.id}`,name:'노트 보드 1',notes:item.notes}] : [];
   }
+  function workDocuments(item) {
+    return item.taskDocuments ?? (item.document ? [{id:`default:${item.id}`,name:'작업 문서 1',...item.document}] : []);
+  }
   function name(value) {
     value = (value || '').trim();
     if (!value || value.length > 200) throw new Error('이름을 1~200자로 입력해 주세요.');
@@ -107,6 +110,32 @@
       ids.add(board.id); name(board.name); validateNotes(board.notes);
     }
   }
+  function setWorkDocuments(item, documents) {
+    if (!Array.isArray(documents)) throw new Error('작업 문서 형식이 올바르지 않습니다.');
+    const ids = new Set();
+    item.taskDocuments = documents.map(doc => {
+      if (!doc || typeof doc.id !== 'string' || !doc.id || ids.has(doc.id)) throw new Error('작업 문서 식별자가 올바르지 않습니다.');
+      ids.add(doc.id); validateDocument(doc);
+      return {...doc, name:name(doc.name)};
+    });
+    delete item.document;
+  }
+  function patchWorkDocuments(item, changes) {
+    if (!Array.isArray(changes)) throw new Error('작업 문서 변경 요청이 올바르지 않습니다.');
+    const documents = new Map(workDocuments(item).map(doc => [doc.id, doc]));
+    for (const {id, expected, document} of changes) {
+      if (typeof id !== 'string' || !id || (document !== null && document?.id !== id)) throw new Error('작업 문서 변경 요청이 올바르지 않습니다.');
+      if (JSON.stringify(documents.get(id) ?? null) !== JSON.stringify(expected)) {
+        throw new Error('작업 문서가 다른 곳에서 변경되었습니다. 편집 내용을 확인해 주세요.');
+      }
+      if (document === null) documents.delete(id);
+      else {
+        validateDocument(document);
+        documents.set(id, {...document, name:name(document.name)});
+      }
+    }
+    return [...documents.values()];
+  }
   function saveProjectDocuments(data, projectId, documents, orderIds) {
     if (!Array.isArray(documents) || !Array.isArray(orderIds)) throw new Error('문서 저장 요청이 올바르지 않습니다.');
     const ids = new Set();
@@ -115,6 +144,10 @@
       ids.add(draft.id); const title = name(draft.title); validateDocument(draft);
       const existing = find(data.documents, draft.id);
       if (existing && (existing.projectId !== projectId || existing.workItemId)) throw new Error('다른 프로젝트의 문서는 수정할 수 없습니다.');
+      if (draft.expected !== undefined) {
+        const current = existing ? projectDocumentVersion(existing) : null;
+        if (JSON.stringify(current) !== JSON.stringify(draft.expected)) throw new Error('프로젝트 문서가 다른 곳에서 변경되었습니다. 편집 내용을 확인해 주세요.');
+      }
       const now = new Date().toISOString();
       const parentId = draft.parentId !== undefined ? projectFolder(data,projectId,draft.parentId) : existing?.parentId || null;
       if (existing) { existing.title = title; existing.content = draft.content; existing.schemaVersion = draft.schemaVersion; existing.parentId = parentId; existing.updatedAt = now; }
@@ -123,6 +156,9 @@
     const projectDocs = data.documents.filter(doc => doc.projectId === projectId && !doc.workItemId);
     if (orderIds.length !== projectDocs.length || new Set(orderIds).size !== orderIds.length || orderIds.some(id => !projectDocs.some(doc => doc.id === id))) throw new Error('문서 순서가 올바르지 않습니다.');
     orderIds.forEach((id, index) => { find(projectDocs,id).sortOrder = index; });
+  }
+  function projectDocumentVersion(doc) {
+    return {title:doc.title, schemaVersion:doc.schemaVersion, updatedAt:doc.updatedAt ?? null};
   }
   function apply(input, action) {
     const data = normalize(structuredClone(input));
@@ -178,26 +214,25 @@
         dates(item, action.startDate, action.endDate, isLocked(data.workItems, item));
         if (typeof action.includeEditDate === 'boolean') item.includeEditDate = action.includeEditDate;
       }
-      if (action.boards !== undefined || action.taskDocuments !== undefined) {
-        if (!Array.isArray(action.boards) || !Array.isArray(action.taskDocuments)) throw new Error('보드 또는 문서 형식이 올바르지 않습니다.');
-        const boardIds = new Set(), documentIds = new Set();
-        for (const board of action.boards) {
-          if (!board || typeof board.id !== 'string' || !board.id || boardIds.has(board.id)) throw new Error('보드 식별자가 올바르지 않습니다.');
-          boardIds.add(board.id); board.name = name(board.name); validateNotes(board.notes);
+      if (action.boards !== undefined || action.taskDocuments !== undefined || action.documentChanges !== undefined) {
+        validateBoards(action.boards);
+        if (action.documentChanges === undefined) setWorkDocuments(item, action.taskDocuments);
+        else {
+          item.taskDocuments = patchWorkDocuments(item, action.documentChanges);
+          delete item.document;
         }
-        for (const doc of action.taskDocuments) {
-          if (!doc || typeof doc.id !== 'string' || !doc.id || documentIds.has(doc.id)) throw new Error('작업 문서 식별자가 올바르지 않습니다.');
-          documentIds.add(doc.id); doc.name = name(doc.name); validateDocument(doc);
-        }
-        item.boards = action.boards; item.taskDocuments = action.taskDocuments;
-        delete item.notes; delete item.document;
+        item.boards = action.boards.map(board => ({...board, name:name(board.name)}));
+        delete item.notes;
       } else if (action.notes !== undefined || action.document !== undefined) {
         if (!action.document) throw new Error('문서 형식이 올바르지 않습니다.');
         validateNotes(action.notes); validateDocument(action.document);
         item.notes = action.notes; item.document = action.document;
       }
-    }
-    else if (op === 'move') {
+    } else if (op === 'work-documents') {
+      if (kind !== 'work') throw new Error('작업 문서 명령이 아닙니다.');
+      item.taskDocuments = patchWorkDocuments(item, action.documentChanges);
+      delete item.document;
+    } else if (op === 'move') {
       if (kind === 'work' && action.targetId) {
         const target = find(list, action.targetId);
         if (!target || target.projectId !== item.projectId || !['before','after','inside'].includes(action.placement)) throw new Error('이동 위치가 올바르지 않습니다.');
@@ -265,7 +300,7 @@
       data.documents = data.documents.filter(x => !projectIds.has(x.projectId) && !workIds.has(x.workItemId));
     } else throw new Error('알 수 없는 명령입니다.');
     if (kind === 'work' && item?.includeEditDate && item.type === 'task' &&
-        ['detail', 'rename', 'complete'].includes(op) && !isLocked(data.workItems, item) &&
+        ['detail', 'rename', 'complete', 'work-documents'].includes(op) && !isLocked(data.workItems, item) &&
         JSON.stringify(item) !== JSON.stringify(find(input.workItems, id))) {
       const now = new Date();
       const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
@@ -282,5 +317,5 @@
     }
     visit(null, '', 0); return result;
   }
-  return { normalize, apply, descendants, numbered, workBoards, shiftDates, isLocked, inheritedLock, isCompleted, inheritedCompletion };
+  return { normalize, apply, descendants, numbered, workBoards, workDocuments, projectDocumentVersion, shiftDates, isLocked, inheritedLock, isCompleted, inheritedCompletion };
 });

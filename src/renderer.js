@@ -4,10 +4,47 @@ let data, view, busy = false, pendingContent = 0;
 const scheduleHistory = new Map();
 const attachmentCounts = {work:new Map(), project:new Map()};
 function historyFor(projectId) { if (!scheduleHistory.has(projectId)) scheduleHistory.set(projectId, {undo:[], redo:[]}); return scheduleHistory.get(projectId); }
+let activeDocumentEditor, agentChange;
+function registerDocumentEditor(editor, signal) {
+  activeDocumentEditor = editor;
+  signal.addEventListener('abort', () => { if (activeDocumentEditor === editor) activeDocumentEditor = null; }, {once:true});
+}
+function releaseAgentChange() {
+  if (!agentChange) return;
+  const {focus, editor} = agentChange;
+  agentChange = null;
+  document.body.inert = false;
+  if (editor && focus?.isConnected && document.activeElement !== focus) focus.focus({preventScroll:true});
+}
 window.agentBridge = {
-  begin() { if (!data || !view || busy || pendingContent || document.querySelector('dialog[open]') || document.body.inert) return false; document.body.inert = true; return true; },
-  finish(content) { data = domain.normalize(content); render(); document.body.inert = false; status.textContent = '에이전트 변경 사항이 저장됨'; },
-  cancel() { document.body.inert = false; }
+  begin(targets) {
+    const blocked = '앱에서 편집 또는 다른 작업이 진행 중입니다. 현재 작업을 마친 뒤 다시 시도하세요.';
+    if (!data || !view || pendingContent || document.body.inert || agentChange) return blocked;
+    const dialogs = document.querySelectorAll('dialog[open]');
+    const editor = dialogs.length === 1 && activeDocumentEditor?.dialog === dialogs[0] ? activeDocumentEditor : null;
+    if (editor) {
+      if (!targets || editor.isBusy()) return blocked;
+      const conflict = targets.some(target => target.kind === editor.kind && target.ownerId === editor.ownerId && editor.protects(target.id));
+      if (conflict) return '앱에서 편집 중인 문서가 포함되어 있습니다. 해당 문서를 저장하거나 편집을 마친 뒤 다시 시도하세요.';
+    } else if (busy || dialogs.length) return blocked;
+    agentChange = {editor, focus:document.activeElement};
+    document.body.inert = true;
+    // A modal dialog escapes inertness on its ancestors.
+    if (editor) editor.dialog.inert = true;
+    return null;
+  },
+  finish({content, targets}) {
+    try {
+      data = domain.normalize(content);
+      agentChange?.editor?.refresh(targets);
+      render();
+      status.textContent = '에이전트 변경 사항이 저장됨';
+    } finally { this.cancel(); }
+  },
+  cancel() {
+    if (agentChange?.editor) agentChange.editor.dialog.inert = false;
+    releaseAgentChange();
+  }
 };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const action = (name, id, label, title = label, extra = '') => `<button type="button" data-action="${name}" data-id="${esc(id || '')}" class="${extra ? 'label' : 'small'}" title="${esc(title)}" aria-label="${esc(title)}">${esc(label)}</button>`;
@@ -21,7 +58,7 @@ function attachmentCount(kind, id) { return attachmentCounts[kind].get(id) ?? 0;
 function contentSummary(kind, item) {
   const counts = kind === 'project'
     ? {document:data.documents.filter(doc => doc.projectId === item.id && !doc.workItemId).length, notes:item.boards?.length ?? 1}
-    : {comments:item.comments?.length ?? 0, document:item.taskDocuments?.length ?? (item.document ? 1 : 0), notes:domain.workBoards(item).length};
+    : {comments:item.comments?.length ?? 0, document:domain.workDocuments(item).length, notes:domain.workBoards(item).length};
   counts.attachments = attachmentCount(kind, item.id);
   const buttons = Object.entries(counts).map(([tab, count]) => contentCountMarkup(kind, item, tab, count)).join('');
   return `<div class="content-counts" data-content-owner="${kind}" data-owner-id="${esc(item.id)}">${buttons}</div>`;
@@ -253,6 +290,23 @@ function openDetail(item, initialTab) {
       catch (e) { error.textContent = e.message; }
       finally { saving = false; lock.disabled = inherited(); }
     };
+    registerDocumentEditor({
+      dialog, kind:'work', ownerId:item.id,
+      isBusy:() => saving,
+      protects:id => collections.protectsDocument(id, !$('#document-panel').hidden),
+      refresh(targets) {
+        if (!targets.some(target => target.kind === 'work' && target.ownerId === item.id)) return;
+        const updated = data.workItems.find(work => work.id === item.id);
+        collections.refreshDocuments(updated);
+        if (!isGroup) {
+          if (start.value === original.startDate) start.value = updated.startDate || '';
+          if (end.value === original.endDate) end.value = updated.endDate || '';
+          original.startDate = updated.startDate || '';
+          original.endDate = updated.endDate || '';
+          end.min = start.value || '0001-01-01';
+        }
+      }
+    }, detailSignal);
     updateLock(); dialog.showModal();
     (initialTab ? $(`#tab-${initialTab}`) : basic.hidden ? basicToggle : name).focus();
   });

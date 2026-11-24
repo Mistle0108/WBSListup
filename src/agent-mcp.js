@@ -30,5 +30,5 @@ const change = z.discriminatedUnion('action',[
   z.object({action:z.literal('save_work_document'),id:z.string().optional(),workId:z.string(),title:z.string(),text:z.string().describe("Markdown 본문")}),
   z.object({action:z.literal('delete_work_document'),id:z.string(),workId:z.string()})
 ]);
-server.registerTool('apply_changes',{description:'조회 시 받은 revision을 사용해 변경을 한 트랜잭션으로 적용합니다. 문서 text는 줄별 일반 문단으로 저장하며 Markdown 서식은 변환하지 않습니다. 기존 문서 저장은 본문 전체를 교체합니다. 상세 창이 열려 있거나 데이터가 바뀌면 실패합니다.',inputSchema:{revision:z.string(),changes:z.array(change).min(1).max(100)}},safely(async args => request({method:'apply',...args})));
+server.registerTool('apply_changes',{description:'조회 시 받은 revision을 사용해 변경을 한 트랜잭션으로 적용합니다. 문서 text는 Markdown 원문이며 기존 문서 저장은 본문 전체를 교체합니다. 작업 또는 프로젝트 상세가 열린 동안에는 해당 화면에서 편집 중인 문서와 충돌하지 않는 문서 변경만 적용할 수 있습니다. 조회 이후 데이터가 바뀌면 다시 조회해야 합니다.',inputSchema:{revision:z.string(),changes:z.array(change).min(1).max(100)}},safely(async args => request({method:'apply',...args})));
 server.connect(new StdioServerTransport()).catch(error=>{ console.error(error); process.exitCode=1; });

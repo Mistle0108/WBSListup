@@ -34,12 +34,17 @@ function applyChanges(storage, expected, changes) {
       apply({op:'documents-delete',kind:'project',id:c.projectId,documentId:c.id}); results.push({id:c.id});
     } else if (c.action === 'save_work_document' || c.action === 'delete_work_document') {
       const work = data.workItems.find(w => w.id === c.workId); if (!work) throw new Error('작업을 찾을 수 없습니다.');
-      const boards = domain.workBoards(work);
-      const docs = structuredClone(work.taskDocuments || (work.document ? [{id:id(),name:'작업 문서 1',...work.document}] : []));
-      const newId = c.id || id(), index = docs.findIndex(d => d.id === newId);
-      if (c.action === 'delete_work_document') { if (index < 0) throw new Error('작업 문서를 찾을 수 없습니다.'); docs.splice(index,1); }
-      else { if (typeof c.text !== 'string') throw new Error('문서 내용은 문자열이어야 합니다.'); const doc = {id:newId,name:c.title,schemaVersion:2,content:c.text}; if (index < 0) docs.push(doc); else docs[index]=doc; }
-      apply({op:'detail',kind:'work',id:work.id,name:work.name,overview:work.overview || '',hoverSummary:work.hoverSummary || '',startDate:work.startDate,endDate:work.endDate,boards,taskDocuments:docs}); results.push({id:newId});
+      const newId = c.id || id();
+      const expected = domain.workDocuments(work).find(doc => doc.id === newId) ?? null;
+      let document = null;
+      if (c.action === 'delete_work_document') {
+        if (!expected) throw new Error('작업 문서를 찾을 수 없습니다.');
+      } else {
+        if (typeof c.text !== 'string') throw new Error('문서 내용은 문자열이어야 합니다.');
+        document = {id:newId,name:c.title,schemaVersion:2,content:c.text};
+      }
+      apply({op:'work-documents',kind:'work',id:work.id,documentChanges:[{id:newId,expected,document}]});
+      results.push({id:newId});
     } else throw new Error('지원하지 않는 변경입니다: ' + c.action);
   }
   storage.saveContent(data);

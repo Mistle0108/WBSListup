@@ -93,6 +93,9 @@ class Storage {
     const content = this.loadContentMetadata();
     if (!(kind === 'project' ? content.projects : kind === 'work' ? content.workItems : []).some(x => x.id === id)) throw new Error('첨부 대상이 없습니다.');
   }
+  listAttachmentCounts() {
+    return this.db.prepare('SELECT kind, owner_id AS id, COUNT(*) AS count FROM attachments GROUP BY kind, owner_id').all();
+  }
   listAttachments(kind, id) {
     this.attachmentOwner(kind, id);
     return this.db.prepare('SELECT id, name FROM attachments WHERE kind = ? AND owner_id = ? ORDER BY rowid').all(kind, id);

@@ -1,4 +1,4 @@
-function openProjectDetail(project) {
+function openProjectDetail(project, initialTab) {
   return new Promise(resolve => {
     const dialog = document.querySelector('#project-dialog'), list = document.querySelector('#project-doc-list');
     const error = document.querySelector('#project-doc-error'), events = new AbortController(), signal = events.signal;
@@ -10,7 +10,10 @@ function openProjectDetail(project) {
     const snapshot = doc => ({title:doc.title,content:doc.editor ? doc.editor.value : doc.content});
     const dirty = doc => !doc.saved || JSON.stringify(snapshot(doc)) !== doc.baseline;
     const displayState = doc => { doc.element.querySelector('.project-doc-state').textContent = dirty(doc) ? '미저장' : '저장됨'; };
-    function refreshEmpty() { document.querySelector('#project-doc-empty').hidden = docs.length !== 0; }
+    function refreshEmpty() {
+      document.querySelector('#project-doc-empty').hidden = docs.length !== 0;
+      setTabCount('project-tab-docs', docs.length);
+    }
     function refreshOrder() {
       function visit(parentId,depth,visible) {
         for (const folder of folders.filter(f => (f.parentId || null) === parentId)) {
@@ -179,7 +182,10 @@ function openProjectDetail(project) {
     }
     function finish() {
       events.abort(); boardManager.destroy(); for (const doc of docs) closeEditor(doc); list.replaceChildren(); dialog.close();
-      const target = document.querySelector(`[data-action="detail-project"][data-id="${CSS.escape(project.id)}"]`); if (target) target.focus(); resolve();
+      const selector = `[data-action="detail-project"][data-id="${CSS.escape(project.id)}"]`;
+      const countButton = initialTab && document.querySelector(selector + `[data-content-tab="${initialTab}"]`);
+      const target = countButton || document.querySelector(selector);
+      target?.focus(); resolve();
     }
     async function close() {
       if (saving) return;
@@ -196,7 +202,7 @@ function openProjectDetail(project) {
     }
     list.replaceChildren(); document.querySelector('#project-detail-title').textContent = project.name + ' · 프로젝트 상세'; error.textContent = '';
     docs.forEach(doc => list.append(makeCard(doc))); folders.forEach(folder=>list.append(makeFolder(folder))); refreshOrder();
-    boardManager=createProjectBoards(project,signal,()=>saveDocuments([],true));
+    boardManager=createProjectBoards(project,signal,()=>saveDocuments([],true),count=>setTabCount('project-tab-board',count));
     document.querySelector('#project-doc-add').addEventListener('click',add,{signal});
     document.querySelector('#project-folder-add').addEventListener('click',() => addFolder(selectedFolder),{signal});
     document.querySelector('.project-doc-root').addEventListener('click',()=>{selectedFolder=null;refreshOrder();},{signal});
@@ -204,7 +210,9 @@ function openProjectDetail(project) {
     document.querySelector('#project-tab-board').addEventListener('click',()=>selectTab('board'),{signal});
     document.querySelector('#project-detail-close').addEventListener('click',close,{signal}); dialog.oncancel = event => { event.preventDefault(); close(); };
     document.querySelector('#project-tab-attachments').addEventListener('click',()=>selectTab('attachments'),{signal});
-    createAttachments(document.querySelector('#project-attachments'), 'project', project.id, signal);
-    installDrag(); selectTab('docs'); dialog.showModal(); document.querySelector('#project-doc-scroll').scrollTop = 0;
+    createAttachments(document.querySelector('#project-attachments'), 'project', project.id, signal, false, attachmentCountListener('project', project, 'project-tab-attachments', signal));
+    const tab = {document:'docs', notes:'board', attachments:'attachments'}[initialTab] ?? 'docs';
+    installDrag(); selectTab(tab); dialog.showModal(); document.querySelector('#project-doc-scroll').scrollTop = 0;
+    if (initialTab) document.getElementById('project-tab-' + tab).focus();
   });
 }

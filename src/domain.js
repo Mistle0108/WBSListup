@@ -6,6 +6,10 @@
   function normalize(data) {
     return { ...data, folders: data.folders || [], projects: data.projects || [], workItems: data.workItems || [], documents: data.documents || [], projectDocumentFolders:data.projectDocumentFolders || [] };
   }
+  function workBoards(item) {
+    if (Array.isArray(item.boards)) return item.boards;
+    return item.notes?.length ? [{id:`default:${item.id}`,name:'노트 보드 1',notes:item.notes}] : [];
+  }
   function name(value) {
     value = (value || '').trim();
     if (!value || value.length > 200) throw new Error('이름을 1~200자로 입력해 주세요.');
@@ -170,7 +174,10 @@
         if (typeof action.barColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(action.barColor)) throw new Error('막대 색상이 올바르지 않습니다.');
         item.barColor = action.barColor.toLowerCase();
       }
-      if (item.type === 'task') dates(item, action.startDate, action.endDate, isLocked(data.workItems, item));
+      if (item.type === 'task') {
+        dates(item, action.startDate, action.endDate, isLocked(data.workItems, item));
+        if (typeof action.includeEditDate === 'boolean') item.includeEditDate = action.includeEditDate;
+      }
       if (action.boards !== undefined || action.taskDocuments !== undefined) {
         if (!Array.isArray(action.boards) || !Array.isArray(action.taskDocuments)) throw new Error('보드 또는 문서 형식이 올바르지 않습니다.');
         const boardIds = new Set(), documentIds = new Set();
@@ -257,6 +264,14 @@
       data.workItems = data.workItems.filter(x => !workIds.has(x.id));
       data.documents = data.documents.filter(x => !projectIds.has(x.projectId) && !workIds.has(x.workItemId));
     } else throw new Error('알 수 없는 명령입니다.');
+    if (kind === 'work' && item?.includeEditDate && item.type === 'task' &&
+        ['detail', 'rename', 'complete'].includes(op) && !isLocked(data.workItems, item) &&
+        JSON.stringify(item) !== JSON.stringify(find(input.workItems, id))) {
+      const now = new Date();
+      const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+      if (!item.startDate || item.startDate > today) item.startDate = today;
+      if (!item.endDate || item.endDate < today) item.endDate = today;
+    }
     return data;
   }
   function numbered(data, projectId) {
@@ -267,5 +282,5 @@
     }
     visit(null, '', 0); return result;
   }
-  return { normalize, apply, descendants, numbered, shiftDates, isLocked, inheritedLock, isCompleted, inheritedCompletion };
+  return { normalize, apply, descendants, numbered, workBoards, shiftDates, isLocked, inheritedLock, isCompleted, inheritedCompletion };
 });

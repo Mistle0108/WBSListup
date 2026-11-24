@@ -1,5 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('storage', {
+  loadDesktopSettings: () => ipcRenderer.invoke('desktop-settings:load'),
+  setDesktopSetting: (key, enabled) => ipcRenderer.invoke('desktop-settings:set', key, enabled),
+  listAttachmentCounts: () => ipcRenderer.invoke('attachments:counts'),
   listAttachments: (kind, id) => ipcRenderer.invoke('attachments:list', kind, id),
   addAttachments: (kind, id) => ipcRenderer.invoke('attachments:add', kind, id),
   deleteAttachment: (kind, id, attachmentId) => ipcRenderer.invoke('attachments:delete', kind, id, attachmentId),

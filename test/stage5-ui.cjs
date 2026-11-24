@@ -10,6 +10,7 @@ app.whenReady().then(()=>{const win=BrowserWindow.getAllWindows()[0];win.webCont
  await delay(300);await run(`document.querySelector('[data-action="select-work"][data-id="t"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);await delay(120);
  await click('#tab-notes');
  if(process.env.WBS_PHASE==='write'){
+   await click('#board-add');
    await click('#note-add');await run(`(()=>{const t=document.querySelector('.board-note textarea');t.value='첫 메모';t.dispatchEvent(new Event('input',{bubbles:true}))})()`);
    let pos=await run(`(()=>{const x=document.querySelector('.board-note');return {x:parseFloat(x.style.left),y:parseFloat(x.style.top),w:parseFloat(x.style.width)}})()`);
    await move('.note-grip',35,27);let moved=await run(`(()=>{const x=document.querySelector('.board-note');return {x:parseFloat(x.style.left),y:parseFloat(x.style.top),w:parseFloat(x.style.width)}})()`);check(pos.x%20===0 && pos.y%20===0 && moved.x===pos.x+40 && moved.y===pos.y+20,'메모 이동 실패');
@@ -24,7 +25,7 @@ app.whenReady().then(()=>{const win=BrowserWindow.getAllWindows()[0];win.webCont
    const gridAfter=await grid();
    check(gridBefore.spacing!==gridAfter.spacing && Math.abs(gridAfter.spacing-20*gridAfter.scale)<.001 && [gridAfter.relativeX,gridAfter.relativeY].every(n=>Math.abs(n-Math.round(n))<.001),'격자 확대 또는 원점 정렬 실패');
    await run(`document.querySelector('.board-note textarea').dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:100}))`);check(await run(`document.querySelector('#note-layer').style.transform`)===zoomAfter,'텍스트 휠 충돌');
-   await click('#tab-document');check(await run(`document.querySelector('.markdown-source').value===''`),'새 작업 문서가 비어 있지 않음');
+   await click('#tab-document');await click('#task-document-add');check(await run(`document.querySelector('.markdown-source').value===''`),'새 작업 문서가 비어 있지 않음');
    const source = '## 서식 문서\n\n**굵게** [링크](https://example.com)\n\n- [x] 완료\n\n<script>window.__bad=1</script>\n\n[위험](javascript:alert(1))';
    await run('document.querySelector(".markdown-source").focus()');
    await win.webContents.insertText(source);

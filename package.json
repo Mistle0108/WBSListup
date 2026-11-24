@@ -1,7 +1,7 @@
 {
   "name": "wbs-list-up",
   "productName": "WBS List up",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "개인용 프로젝트와 일정 관리",
   "main": "src/main.js",

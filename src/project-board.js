@@ -1,4 +1,4 @@
-function createProjectBoards(project, signal, onSave) {
+function createProjectBoards(project, signal, onSave, onCount) {
   const root = document.querySelector('#project-board-panel'), select = root.querySelector('#project-board-select'), input = root.querySelector('#project-board-name');
   let boards = project.boards ? structuredClone(project.boards) : [{id:`default:${project.id}`,name:'프로젝트 보드 1',notes:[]}];
   let index = boards.length ? 0 : -1, board = null;
@@ -8,6 +8,7 @@ function createProjectBoards(project, signal, onSave) {
   let baseline;
   function show(next) {
     capture(); if(board)board.destroy();board=null;index=next;select.replaceChildren();
+    onCount(boards.length);
     boards.forEach((entry,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=entry.name || '(이름 없음)';select.append(option);});
     select.value=index<0?'':String(index);select.disabled=index<0;input.disabled=index<0;root.querySelector('#project-board-delete').disabled=index<0;root.querySelector('#project-board-workspace').hidden=index<0;
     if(index<0){input.value='';return;}

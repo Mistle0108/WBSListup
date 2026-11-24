@@ -102,7 +102,7 @@ function openProjectOverview(project) {
         catch { element.className='error';element.textContent='문서를 표시하지 못했습니다.'; }
       }
       sectionTitle('boards','노트 보드');
-      const boards=Array.isArray(item.boards)?item.boards:Array.isArray(item.notes)?[{name:'노트 보드 1',notes:item.notes}]:[];
+      const boards=domain.workBoards(item);
       if(!boards.length)empty('저장된 노트 보드가 없습니다.');
       for(const board of boards)renderBoard(board);
     }

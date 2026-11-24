@@ -1,7 +1,7 @@
-function createTaskCollections(item, signal) {
+function createTaskCollections(item, signal, onCount) {
   const newId = () => crypto.randomUUID();
-  let boards = item.boards ? structuredClone(item.boards) : [{id:`default:${item.id}`,name:'노트 보드 1',notes:structuredClone(item.notes || [])}];
-  const entries = item.taskDocuments || [{id:newId(), name:'작업 문서 1', ...(item.document || {schemaVersion:2, content:''})}];
+  const boards = structuredClone(domain.workBoards(item));
+  const entries = item.taskDocuments ?? (item.document ? [{id:newId(), name:'작업 문서 1', ...item.document}] : []);
   const documents = entries.map(entry => ({
     id: entry.id,
     name: entry.name,
@@ -23,6 +23,7 @@ function createTaskCollections(item, signal) {
   }
   function showBoard(index) {
     captureBoard(); if (board) board.destroy(); board = null;
+    onCount('notes', boards.length);
     boardIndex = index; setOptions(boardSelect,boards,index); boardName.disabled = index < 0; $('#board-delete').disabled = index < 0; $('#note-workspace').hidden = index < 0;
     if (index < 0) { boardName.value=''; return; }
     const entry=boards[index]; boardName.value=entry.name; board=openNoteBoard('work',item.id,entry,boardStates.get(entry.id));
@@ -33,6 +34,7 @@ function createTaskCollections(item, signal) {
     const editor=createMarkdownEditor(container,entry.content,isPreview()); const value={editor,container};editors.set(entry.id,value);return value;
   }
   function showDocument(index) {
+    onCount('document', documents.length);
     documentIndex=index;setOptions(docSelect,documents,index);docName.disabled=index<0;$('#task-document-delete').disabled=index<0;$('#editor-workspace').hidden=index<0;
     modeToggle.disabled = index < 0;
     for (const value of editors.values()) value.container.hidden=true;

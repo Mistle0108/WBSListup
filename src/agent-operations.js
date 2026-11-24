@@ -34,7 +34,7 @@ function applyChanges(storage, expected, changes) {
       apply({op:'documents-delete',kind:'project',id:c.projectId,documentId:c.id}); results.push({id:c.id});
     } else if (c.action === 'save_work_document' || c.action === 'delete_work_document') {
       const work = data.workItems.find(w => w.id === c.workId); if (!work) throw new Error('작업을 찾을 수 없습니다.');
-      const boards = work.boards || (work.notes ? [{id:id(),name:'노트 보드 1',notes:work.notes}] : []);
+      const boards = domain.workBoards(work);
       const docs = structuredClone(work.taskDocuments || (work.document ? [{id:id(),name:'작업 문서 1',...work.document}] : []));
       const newId = c.id || id(), index = docs.findIndex(d => d.id === newId);
       if (c.action === 'delete_work_document') { if (index < 0) throw new Error('작업 문서를 찾을 수 없습니다.'); docs.splice(index,1); }

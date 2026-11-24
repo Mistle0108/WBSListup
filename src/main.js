@@ -3,11 +3,21 @@ const path = require('node:path');
 const { Storage } = require('./storage');
 const { prepareDatabase } = require('./database-path');
 const { startAgentServer } = require('./agent-server');
+const { installDesktopSettings } = require('./desktop-settings');
 app.setName('WBS List up');
-let storage, stopAgent;
+let storage, stopAgent, mainWindow;
 
-app.whenReady().then(async () => {
-  const window = new BrowserWindow({
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+async function start() {
+  const icon = path.join(__dirname, 'assets', 'checklist-folder.ico');
+  const window = mainWindow = new BrowserWindow({
+    icon,
     width: 1200, height: 800, minWidth: 700, minHeight: 500,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
@@ -17,6 +27,8 @@ app.whenReady().then(async () => {
     await prepareDatabase(file, legacy);
     storage = new Storage(file);
     stopAgent = await startAgentServer(storage, window, app.getPath('userData'));
+    await installDesktopSettings(window, storage, icon, showMainWindow);
+    ipcMain.handle('attachments:counts', () => storage.listAttachmentCounts());
     ipcMain.handle('attachments:list', (_event, kind, id) => storage.listAttachments(kind, id));
     ipcMain.handle('attachments:add', async (_event, kind, id) => {
       storage.attachmentOwner(kind, id);
@@ -43,6 +55,13 @@ app.whenReady().then(async () => {
     ipcMain.handle('storage:load-content', () => { throw error; });
   }
   window.loadFile(path.join(__dirname, 'index.html'));
-});
-app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { if (stopAgent) stopAgent(); if (storage) storage.close(); });
+}
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', showMainWindow);
+  app.whenReady().then(start);
+  app.on('window-all-closed', () => app.quit());
+  app.on('will-quit', () => { if (stopAgent) stopAgent(); if (storage) storage.close(); });
+}

@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const status = $('#status');
 let data, view, busy = false, pendingContent = 0;
 const scheduleHistory = new Map();
+const attachmentCounts = {work:new Map(), project:new Map()};
 function historyFor(projectId) { if (!scheduleHistory.has(projectId)) scheduleHistory.set(projectId, {undo:[], redo:[]}); return scheduleHistory.get(projectId); }
 window.agentBridge = {
   begin() { if (!data || !view || busy || pendingContent || document.querySelector('dialog[open]') || document.body.inert) return false; document.body.inert = true; return true; },
@@ -10,6 +11,46 @@ window.agentBridge = {
 };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const action = (name, id, label, title = label, extra = '') => `<button type="button" data-action="${name}" data-id="${esc(id || '')}" class="${extra ? 'label' : 'small'}" title="${esc(title)}" aria-label="${esc(title)}">${esc(label)}</button>`;
+const contentTypes = {
+  comments: {label:'코멘트', icon:'<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l1.7-3.6A8.5 8.5 0 1 1 21 11.5Z"/>'},
+  document: {label:'작업 문서', icon:'<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6"/>'},
+  notes: {label:'노트 보드', icon:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M12 9v11"/>'},
+  attachments: {label:'첨부파일', icon:'<path d="m20 11-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/>'}
+};
+function attachmentCount(kind, id) { return attachmentCounts[kind].get(id) ?? 0; }
+function contentSummary(kind, item) {
+  const counts = kind === 'project'
+    ? {document:data.documents.filter(doc => doc.projectId === item.id && !doc.workItemId).length, notes:item.boards?.length ?? 1}
+    : {comments:item.comments?.length ?? 0, document:item.taskDocuments?.length ?? (item.document ? 1 : 0), notes:domain.workBoards(item).length};
+  counts.attachments = attachmentCount(kind, item.id);
+  const buttons = Object.entries(counts).map(([tab, count]) => contentCountMarkup(kind, item, tab, count)).join('');
+  return `<div class="content-counts" data-content-owner="${kind}" data-owner-id="${esc(item.id)}">${buttons}</div>`;
+}
+function contentCountMarkup(kind, item, tab, count) {
+  if (!count) return `<span class="content-count-empty" data-content-tab="${tab}" aria-hidden="true"></span>`;
+  const {label, icon} = contentTypes[tab], title = `${label} ${count}개`;
+  return `<button type="button" class="content-count" data-action="detail-${kind}" data-id="${esc(item.id)}" data-content-tab="${tab}" title="${title}" aria-label="${esc(item.name)} · ${title}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg><span>${count}</span></button>`;
+}
+function setTabCount(id, count) {
+  const tab = document.getElementById(id);
+  let badge = tab.querySelector('.tab-count');
+  if (!badge) { badge = document.createElement('span'); badge.className = 'tab-count'; tab.append(badge); }
+  badge.textContent = String(count);
+  badge.setAttribute('aria-label', `${count}개`);
+  badge.classList.toggle('zero', count === 0);
+}
+function attachmentCountListener(kind, item, tabId, signal) {
+  setTabCount(tabId, attachmentCount(kind, item.id));
+  return count => {
+    if (attachmentCount(kind, item.id) !== count) {
+      if (count) attachmentCounts[kind].set(item.id, count); else attachmentCounts[kind].delete(item.id);
+      const slot = $(`[data-content-owner="${kind}"][data-owner-id="${CSS.escape(item.id)}"] [data-content-tab="attachments"]`);
+      const owner = (kind === 'work' ? data.workItems : data.projects).find(entry => entry.id === item.id);
+      if (slot && owner) slot.outerHTML = contentCountMarkup(kind, owner, 'attachments', count);
+    }
+    if (!signal.aborted) setTabCount(tabId, count);
+  };
+}
 function lockIcon(locked) {
   const shackle = locked ? '<path d="M7 10V7a5 5 0 0 1 10 0v3"/>' : '<path d="M8 10V7a5 5 0 0 1 9-3"/>';
   return `<svg class="lock-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${shackle}<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M12 14v3"/></svg>`;
@@ -21,11 +62,15 @@ function barTextColor(color) {
   return luminance > .179 ? '#000000' : '#ffffff';
 }
 function projectView(id) { return view.projects[id] ||= { collapsed: [], selected: null }; }
+function updatePanelToggle(button, expanded, label) {
+  button.setAttribute('aria-expanded', String(expanded));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
 function render() {
   const selectedProject = data.projects.find(p => p.id === view.selectedProject);
   $('#sidebar').hidden = !!view.sidebarClosed;
-  $('#sidebar-toggle').setAttribute('aria-expanded', String(!view.sidebarClosed));
-  $('#sidebar-toggle').setAttribute('aria-label', view.sidebarClosed ? '사이드바 펼치기' : '사이드바 접기');
+  updatePanelToggle($('#sidebar-toggle'), !view.sidebarClosed, view.sidebarClosed ? '프로젝트 목록 펼치기' : '프로젝트 목록 접기');
   function folders(parentId, depth) {
     let html = '';
     for (const folder of data.folders.filter(f => (f.parentId || null) === parentId)) {
@@ -51,15 +96,15 @@ function render() {
     const endDay = timeline.parse(item.endDate), canExtend = !isGroup && !effective && periods.get(item.id)?.start !== null && endDay !== null && endDay < timeline.MAX_DAY;
     const completionInherited = domain.inheritedCompletion(data.workItems,item), completed = domain.isCompleted(data.workItems,item);
     const lockTitle = inherited ? '상위 그룹 일정 잠금 적용 중' : item.isScheduleLocked ? '일정 잠금 해제' : '일정 잠금';
-    return `<div class="schedule-row ${completed ? 'completed' : ''}" data-row-id="${esc(item.id)}"><div class="tree-row work-name ${pv.selected === item.id ? 'selected' : ''}" style="padding-left:${12 + depth * 22}px">${isGroup ? action('toggle-work', item.id, collapsed ? '▸' : '▾', collapsed ? '그룹 펼치기' : '그룹 접기') : '<span class="icon"></span>'}<span class="number">${number}</span><input type="checkbox" class="complete-toggle" data-action="complete-work" data-id="${esc(item.id)}" aria-label="${esc(item.name)} 완료${completionInherited ? ' (상위 그룹 완료 적용 중)' : ''}" title="${completionInherited ? '상위 그룹 완료 적용 중' : '완료 상태 변경'}" ${completed ? 'checked' : ''} ${completionInherited ? 'disabled' : ''}><button type="button" data-action="select-work" data-id="${esc(item.id)}" class="label" aria-label="${esc(item.name)}">${esc((isGroup ? '▣ ' : '') + item.name)}</button>${isGroup ? '' : `<button type="button" data-action="extend-work" data-id="${esc(item.id)}" class="small" title="종료일 하루 연장" aria-label="종료일 하루 연장" ${canExtend ? '' : 'disabled'}>+1일</button>`}<button type="button" data-action="lock-work" data-id="${esc(item.id)}" class="small lock-toggle" title="${esc(lockTitle)}" aria-label="${esc(lockTitle)}" aria-pressed="${effective}" ${inherited ? 'disabled' : ''}>${lockIcon(effective)}</button></div><div class="timeline-cell" data-timeline-id="${esc(item.id)}"></div></div>`;
+    return `<div class="schedule-row ${completed ? 'completed' : ''}" data-row-id="${esc(item.id)}"><div class="tree-row work-name ${pv.selected === item.id ? 'selected' : ''}" style="padding-left:${12 + depth * 22}px">${isGroup ? action('toggle-work', item.id, collapsed ? '▸' : '▾', collapsed ? '그룹 펼치기' : '그룹 접기') : '<span class="icon"></span>'}<span class="number">${number}</span><input type="checkbox" class="complete-toggle" data-action="complete-work" data-id="${esc(item.id)}" aria-label="${esc(item.name)} 완료${completionInherited ? ' (상위 그룹 완료 적용 중)' : ''}" title="${completionInherited ? '상위 그룹 완료 적용 중' : '완료 상태 변경'}" ${completed ? 'checked' : ''} ${completionInherited ? 'disabled' : ''}><button type="button" data-action="select-work" data-id="${esc(item.id)}" class="label" aria-label="${esc(item.name)}">${esc((isGroup ? '▣ ' : '') + item.name)}</button>${contentSummary('work', item)}${isGroup ? '<span class="work-extend-slot" aria-hidden="true"></span>' : `<button type="button" data-action="extend-work" data-id="${esc(item.id)}" class="small work-extend-slot" title="종료일 하루 연장" aria-label="종료일 하루 연장" ${canExtend ? '' : 'disabled'}>+1일</button>`}<button type="button" data-action="lock-work" data-id="${esc(item.id)}" class="small lock-toggle" title="${esc(lockTitle)}" aria-label="${esc(lockTitle)}" aria-pressed="${effective}" ${inherited ? 'disabled' : ''}>${lockIcon(effective)}</button></div><div class="timeline-cell" data-timeline-id="${esc(item.id)}"></div></div>`;
   }).join('');
-  $('#workspace').innerHTML = `<div class="project-header"><div class="project-title"><h1>${esc(selectedProject.name)}</h1>${action('detail-project', selectedProject.id, '프로젝트 상세')}${action('overview-project', selectedProject.id, '문서 모아보기')}</div><p>휠로 목록을 세로 이동하고 Ctrl+휠로 확대하세요. 작업 이름은 드래그해 순서와 그룹을 바꿀 수 있습니다.</p></div><div class="work-heading"><h2>작업 목록</h2><div class="toolbar"><button type="button" data-action="undo-schedule" title="되돌리기 (Ctrl+Z)" ${history.undo.length ? '' : 'disabled'}>되돌리기</button><button type="button" data-action="redo-schedule" title="다시 실행 (Ctrl+Y 또는 Ctrl+Shift+Z)" ${history.redo.length ? '' : 'disabled'}>다시 실행</button>${action('create-task', '', '+ 작업')}${action('create-group', '', '+ 그룹')}</div></div><div class="schedule-board" tabindex="0" aria-label="일정 탐색"><div class="schedule-head"><div class="work-head">작업<div class="column-divider" role="separator" aria-label="작업 영역 너비 조절" aria-orientation="vertical" tabindex="0" title="드래그하여 작업 영역 너비 조절"></div></div><div class="time-ruler"></div></div>${html || '<p class="empty" style="padding:12px 20px">작업이나 그룹을 추가하세요.</p>'}</div>`;
+  $('#workspace').innerHTML = `<div class="project-header"><div class="project-title"><h1>${esc(selectedProject.name)}</h1>${contentSummary('project', selectedProject)}${action('detail-project', selectedProject.id, '프로젝트 상세')}${action('overview-project', selectedProject.id, '문서 모아보기')}</div><p>휠로 목록을 세로 이동하고 Ctrl+휠로 확대하세요. 작업 이름은 드래그해 순서와 그룹을 바꿀 수 있습니다.</p></div><div class="work-heading"><h2>작업 목록</h2><div class="toolbar"><button type="button" data-action="undo-schedule" title="되돌리기 (Ctrl+Z)" ${history.undo.length ? '' : 'disabled'}>되돌리기</button><button type="button" data-action="redo-schedule" title="다시 실행 (Ctrl+Y 또는 Ctrl+Shift+Z)" ${history.redo.length ? '' : 'disabled'}>다시 실행</button>${action('create-task', '', '+ 작업')}${action('create-group', '', '+ 그룹')}</div></div><div class="schedule-board" tabindex="0" aria-label="일정 탐색"><div class="schedule-head"><div class="work-head">작업<div class="column-divider" role="separator" aria-label="작업 영역 너비 조절" aria-orientation="vertical" tabindex="0" title="드래그하여 작업 영역 너비 조절"></div></div><div class="time-ruler"></div></div>${html || '<p class="empty" style="padding:12px 20px">작업이나 그룹을 추가하세요.</p>'}</div>`;
   const board = $('.schedule-board'); if (Number.isFinite(pv.workColumnWidth)) board.style.setProperty('--work-width', `${pv.workColumnWidth}px`); board.scrollTop = pv.scrollTop || 0;
   setupTimeline(selectedProject.id, periods);
   setupWorkDrag(board, selectedProject.id);
 
 }
-function openDetail(item) {
+function openDetail(item, initialTab) {
   return new Promise(resolve => {
     const dialog = $('#detail-dialog'), form = $('#detail-form');
     for (const dimension of ['width', 'height']) {
@@ -75,15 +120,31 @@ function openDetail(item) {
     });
     resizeObserver.observe(dialog, {attributes:true, attributeFilter:['style']});
     const name = $('#detail-name'), start = $('#detail-start'), end = $('#detail-end'), color = $('#detail-color'), overview = $('#detail-overview'), summary = $('#detail-summary'), lock = $('#detail-lock'), error = $('#detail-error');
+    const basic = $('#detail-basic'), basicToggle = $('#detail-basic-toggle'), columns = $('.detail-columns');
+    function setBasicCollapsed(collapsed) {
+      basic.hidden = collapsed;
+      columns.classList.toggle('basic-collapsed', collapsed);
+      updatePanelToggle(basicToggle, !collapsed, collapsed ? '기본 정보 펼치기' : '기본 정보 접기');
+    }
+    setBasicCollapsed(view.detailBasicCollapsed?.[item.id] === true);
+    basicToggle.onclick = () => {
+      const collapsed = !basic.hidden;
+      setBasicCollapsed(collapsed);
+      const states = view.detailBasicCollapsed ||= {};
+      if (collapsed) states[item.id] = true; else delete states[item.id];
+      scheduleViewSave();
+    };
     const period = timeline.aggregate(data.workItems, item.projectId).get(item.id);
     const isGroup = item.type === 'group';
+    dialog.querySelector('.detail-header h2').textContent = isGroup ? '작업 그룹 상세' : '작업 상세';
     const detailEvents = new AbortController();
     const detailSignal = detailEvents.signal;
-    const collections = createTaskCollections(item, detailSignal);
+    form.addEventListener('invalid', event => { if (basic.hidden && basic.contains(event.target)) basicToggle.click(); }, {capture:true, signal:detailSignal});
+    const collections = createTaskCollections(item, detailSignal, (tab, count) => setTabCount('tab-' + tab, count));
     const comments = structuredClone(item.comments || []), commentInput = $('#comment-input');
     commentInput.value = '';
     function renderComments() {
-      $('#comment-count').textContent = String(comments.length);
+      setTabCount('tab-comments', comments.length);
       const list = $('#comment-list'); list.replaceChildren();
       if (!comments.length) { const empty = document.createElement('p'); empty.className = 'empty comment-empty'; empty.textContent = '아직 코멘트가 없습니다.'; list.append(empty); }
       comments.forEach((comment, index) => {
@@ -107,9 +168,15 @@ function openDetail(item) {
       for (const tab of ['notes','document','comments','attachments']) { $(`#${tab}-panel`).hidden = which !== tab; $(`#tab-${tab}`).setAttribute('aria-selected',String(which === tab)); }
     }
     for (const tab of ['notes','document','comments','attachments']) $(`#tab-${tab}`).addEventListener('click', () => selectTab(tab), {signal:detailSignal});
-    createAttachments($('#task-attachments'), 'work', item.id, detailSignal);
-    selectTab('comments');
-    let original = {name:item.name, startDate:item.type === 'group' ? '' : item.startDate || '', endDate:item.type === 'group' ? '' : item.endDate || '', overview:item.overview || '', hoverSummary:item.hoverSummary || '', barColor:validBarColor(item), comments:structuredClone(comments), commentDraft:'', ...collections.snapshot()};
+    createAttachments($('#task-attachments'), 'work', item.id, detailSignal, false, attachmentCountListener('work', item, 'tab-attachments', detailSignal));
+    selectTab(initialTab ?? 'comments');
+    const includeDate = $('#detail-include-date');
+    let includeEditDate = !!item.includeEditDate;
+    includeDate.onclick = () => {
+      includeEditDate = !includeEditDate;
+      updateLock();
+    };
+    let original = {includeEditDate, name:item.name, startDate:item.type === 'group' ? '' : item.startDate || '', endDate:item.type === 'group' ? '' : item.endDate || '', overview:item.overview || '', hoverSummary:item.hoverSummary || '', barColor:validBarColor(item), comments:structuredClone(comments), commentDraft:'', ...collections.snapshot()};
     name.value = original.name; overview.value = original.overview; summary.value = original.hoverSummary; color.value = original.barColor;
     start.value = isGroup && period?.start !== null ? timeline.format(period.start) : original.startDate;
     end.value = isGroup && period?.end !== null ? timeline.format(period.end) : original.endDate;
@@ -122,23 +189,35 @@ function openDetail(item) {
     end.min = start.value || '0001-01-01';
     start.addEventListener('change', () => syncDates(), {signal:detailSignal});
     end.addEventListener('change', () => syncDates(), {signal:detailSignal});
-    function current() { return {name:name.value, startDate:isGroup ? '' : start.value, endDate:isGroup ? '' : end.value, overview:overview.value, hoverSummary:summary.value, barColor:color.value, comments:structuredClone(comments), commentDraft:commentInput.value, ...collections.snapshot()}; }
+    function current() { return {includeEditDate, name:name.value, startDate:isGroup ? '' : start.value, endDate:isGroup ? '' : end.value, overview:overview.value, hoverSummary:summary.value, barColor:color.value, comments:structuredClone(comments), commentDraft:commentInput.value, ...collections.snapshot()}; }
     function locked() { const currentItem = data.workItems.find(x => x.id === item.id); return currentItem ? domain.isLocked(data.workItems,currentItem) : false; }
     function inherited() { const currentItem = data.workItems.find(x => x.id === item.id); return currentItem ? domain.inheritedLock(data.workItems,currentItem) : false; }
     function updateLock() {
+      includeDate.hidden = isGroup;
+      includeDate.disabled = locked();
+      includeDate.setAttribute('aria-pressed', String(includeEditDate));
       start.disabled = end.disabled = isGroup || locked(); lock.hidden = false; lock.disabled = inherited();
       lock.innerHTML = lockIcon(locked()) + (inherited() ? ' 상위 그룹에서 잠김' : item.isScheduleLocked ? ' 일정 잠금 해제' : ' 일정 잠금');
       lock.setAttribute('aria-pressed', String(locked()));
       $('#detail-period-hint').textContent = isGroup ? '그룹 기간은 하위 작업에서 자동 계산됩니다.' : locked() ? '일정이 잠겨 있어 날짜를 변경할 수 없습니다.' : '날짜를 모두 비우면 기간 미정입니다.';
     }
-    function finish() { resizeObserver.disconnect(); detailEvents.abort(); collections.destroy(); dialog.close(); const target = document.querySelector(`[data-action="select-work"][data-id="${CSS.escape(item.id)}"]`); if (target) target.focus(); resolve(); }
+    function finish() {
+      resizeObserver.disconnect(); detailEvents.abort(); collections.destroy(); dialog.close();
+      const id = CSS.escape(item.id);
+      const countButton = initialTab && $(`[data-action="detail-work"][data-id="${id}"][data-content-tab="${initialTab}"]`);
+      (countButton || $(`[data-action="select-work"][data-id="${id}"]`))?.focus();
+      resolve();
+    }
     let saving = false;
     async function save() {
       if (saving) return false;
       saving = true; form.inert = true; $('#detail-save').disabled = true; lock.disabled = true; error.textContent = '';
       try {
         await collections.waitPending();
-        addComment(); const {commentDraft, ...draft} = current(); if (!isGroup) timeline.validate(draft.startDate, draft.endDate);
+        addComment();
+        const snapshot = current();
+        if (JSON.stringify(snapshot) === JSON.stringify(original)) { finish(); return true; }
+        const {commentDraft, ...draft} = snapshot; if (!isGroup) timeline.validate(draft.startDate, draft.endDate);
         await changeContent({op:'detail',kind:'work',id:item.id,...draft});
         finish(); return true;
       } catch (e) { error.textContent = e.message; return false; }
@@ -174,7 +253,8 @@ function openDetail(item) {
       catch (e) { error.textContent = e.message; }
       finally { saving = false; lock.disabled = inherited(); }
     };
-    updateLock(); dialog.showModal(); name.focus();
+    updateLock(); dialog.showModal();
+    (initialTab ? $(`#tab-${initialTab}`) : basic.hidden ? basicToggle : name).focus();
   });
 }
 function hideTooltip() { clearTimeout(hideTooltip.timer); $('#tooltip').hidden = true; }
@@ -326,9 +406,9 @@ function setupTimeline(projectId, periods) {
     hideTooltip(); busy = true;
     try { await openDetail(item); } finally { busy = false; }
   });
-  board.addEventListener('pointerover', event => { const bar = event.target.closest('.bar, .work-name'); if (bar && !shift && !drag && !board.classList.contains('work-dragging')) showTooltip(bar,350); });
+  board.addEventListener('pointerover', event => { const bar = event.target.closest('.bar, .work-name'); if (bar && !event.target.closest('.content-count') && !shift && !drag && !board.classList.contains('work-dragging')) showTooltip(bar,350); });
   board.addEventListener('pointerout', event => { if (event.target.closest('.bar, .work-name')) hideTooltip(); });
-  board.addEventListener('focusin', event => { const bar = event.target.closest('.bar, .work-name'); if (bar) showTooltip(bar); });
+  board.addEventListener('focusin', event => { const bar = event.target.closest('.bar, .work-name'); if (bar && !event.target.closest('.content-count')) showTooltip(bar); });
   board.addEventListener('focusout', event => { if (event.target.closest('.bar, .work-name')) hideTooltip(); });
   board.addEventListener('scroll', () => { hideTooltip(); if (!board.isConnected) return; state.scrollTop = board.scrollTop; scheduleViewSave(); });
   board.addEventListener('keydown', event => {
@@ -449,7 +529,7 @@ function optionsForFolders() {
   function visit(parent, prefix) { for (const f of data.folders.filter(x => (x.parentId || null) === parent)) { const label = prefix + f.name; result.push({id: f.id, label}); visit(f.id, label + ' / '); } }
   visit(null, ''); return result;
 }
-async function handle(name, id) {
+async function handle(name, id, initialTab) {
   const selected = view.selectedProject, pv = selected ? projectView(selected) : null;
   if ((name === 'undo-schedule' || name === 'redo-schedule') && selected) return restoreSchedule(name === 'undo-schedule' ? 'undo' : 'redo', selected);
   if (name === 'toggle-sidebar') return changeView(v => { v.sidebarClosed = !v.sidebarClosed; });
@@ -483,7 +563,10 @@ async function handle(name, id) {
   const [op, kind] = name.split('-');
   const list = kind === 'folder' ? data.folders : kind === 'project' ? data.projects : data.workItems;
   const item = list.find(x => x.id === id); if (!item) return;
-  if (op === 'detail') return kind === 'project' ? openProjectDetail(item) : openDetail(item);
+  if (op === 'detail') {
+    hideTooltip();
+    return kind === 'project' ? openProjectDetail(item, initialTab) : openDetail(item, initialTab);
+  }
   if (op === 'overview' && kind === 'project') return openProjectOverview(item);
   if (op === 'extend' && kind === 'work' && item.type === 'task') {
     const endDay = timeline.parse(item.endDate);
@@ -509,7 +592,7 @@ async function handle(name, id) {
     const description = `“${item.name}”을(를) 삭제합니다. 포함: 폴더 ${Math.max(0, folderIds.size - (kind === 'folder' ? 1 : 0))}개, 프로젝트 ${kind === 'project' ? 0 : projectIds.size}개, 하위 작업·그룹 ${Math.max(0, workIds.size - (kind === 'work' ? 1 : 0))}개.`;
     if (!(await ask({title:'삭제 확인',description,confirm:true}))) return;
     const nextProject = kind === 'project' && view.selectedProject === id ? data.projects.find(p => p.id !== id && (p.parentId || null) === (item.parentId || null))?.id || null : null;
-    return changeContent({op,kind,id}, v => { if (projectIds.has(v.selectedProject)) v.selectedProject = nextProject; if (folderIds.has(v.selectedFolder)) v.selectedFolder = null; v.expandedFolders = v.expandedFolders.filter(x => !folderIds.has(x)); for (const projectId of projectIds) delete v.projects[projectId]; for (const state of Object.values(v.projects)) { state.collapsed = state.collapsed.filter(x => !workIds.has(x)); if (workIds.has(state.selected)) state.selected = null; } });
+    return changeContent({op,kind,id}, v => { if (projectIds.has(v.selectedProject)) v.selectedProject = nextProject; if (folderIds.has(v.selectedFolder)) v.selectedFolder = null; v.expandedFolders = v.expandedFolders.filter(x => !folderIds.has(x)); for (const projectId of projectIds) delete v.projects[projectId]; if (v.detailBasicCollapsed) for (const workId of workIds) delete v.detailBasicCollapsed[workId]; for (const state of Object.values(v.projects)) { state.collapsed = state.collapsed.filter(x => !workIds.has(x)); if (workIds.has(state.selected)) state.selected = null; } });
   }
 }
 document.addEventListener('click', async event => {
@@ -517,7 +600,7 @@ document.addEventListener('click', async event => {
   if (target?.dataset.action === 'complete-work') event.preventDefault();
   if (!target || busy || !data || (target.dataset.action === 'select-work' && event.detail > 1)) return;
   busy = true; status.textContent = '처리 중';
-  try { await handle(target.id === 'sidebar-toggle' ? 'toggle-sidebar' : target.dataset.action, target.dataset.id || ''); status.textContent = '저장됨'; status.className = ''; }
+  try { await handle(target.id === 'sidebar-toggle' ? 'toggle-sidebar' : target.dataset.action, target.dataset.id || '', target.dataset.contentTab); status.textContent = '저장됨'; status.className = ''; }
   catch (error) { status.textContent = '저장 실패: ' + error.message; status.className = 'error'; }
   finally { busy = false; }
 });
@@ -532,7 +615,44 @@ document.addEventListener('keydown', async event => {
   catch (error) { status.textContent = '저장 실패: ' + error.message; status.className = 'error'; }
   finally { busy = false; }
 });
-Promise.all([window.storage.loadContent(), window.storage.loadViewState()]).then(([content, state]) => {
+const settingsDialog = $('#settings-dialog');
+const settingsError = $('#settings-error');
+const startupOption = $('#startup-option');
+const settingsInputs = {openAtLogin:$('#open-at-login'), closeToTray:$('#close-to-tray')};
+let desktopSettings, updatingDesktopSettings = false;
+
+function showDesktopSettings() {
+  startupOption.hidden = !desktopSettings?.supportsStartup;
+  for (const [key, input] of Object.entries(settingsInputs)) input.checked = desktopSettings?.[key] === true;
+}
+async function updateDesktopSettings(action) {
+  if (updatingDesktopSettings) return;
+  updatingDesktopSettings = true;
+  for (const input of Object.values(settingsInputs)) input.disabled = true;
+  settingsError.hidden = true;
+  try { desktopSettings = await action(); }
+  catch (error) {
+    settingsError.textContent = error.message;
+    settingsError.hidden = false;
+  } finally {
+    updatingDesktopSettings = false;
+    showDesktopSettings();
+    for (const input of Object.values(settingsInputs)) input.disabled = !desktopSettings;
+  }
+}
+$('#settings-open').addEventListener('click', () => {
+  if (!data || busy || settingsDialog.open || updatingDesktopSettings) return;
+  desktopSettings = null;
+  settingsDialog.showModal();
+  updateDesktopSettings(() => window.storage.loadDesktopSettings());
+});
+$('#settings-close').addEventListener('click', () => settingsDialog.close());
+for (const [key, input] of Object.entries(settingsInputs)) {
+  input.addEventListener('change', () => updateDesktopSettings(() => window.storage.setDesktopSetting(key, input.checked)));
+}
+
+Promise.all([window.storage.loadContent(), window.storage.loadViewState(), window.storage.listAttachmentCounts()]).then(([content, state, counts]) => {
+  for (const {kind, id, count} of counts) attachmentCounts[kind].set(id, count);
   data = domain.normalize(content); view = { sidebarClosed:false, selectedFolder:null, selectedProject:null, expandedFolders:[], projects:{}, ...state };
   render(); status.textContent = '저장소 준비됨';
 }).catch(error => { status.textContent = '저장소 오류: ' + error.message; status.className = 'error'; $('#workspace').textContent = '데이터를 불러오지 못했습니다. 앱을 다시 실행해 주세요.'; });
